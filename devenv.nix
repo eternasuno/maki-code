@@ -1,0 +1,3 @@
+{...}: {
+  languages.lua.enable = true;
+}
