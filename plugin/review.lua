@@ -1,1 +1,1 @@
-require("maki_review").setup()
+require("review").setup()

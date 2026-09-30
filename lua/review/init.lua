@@ -22,6 +22,21 @@
 --     "active pane" is plugin state, indicated by border style.
 
 local TextInput = require("maki.text_input")
+local Tree = require("common.tree")
+local Comments = require("common.comments")
+local Highlight = require("common.highlight")
+local Layout = require("common.layout")
+local Shell = require("common.shell")
+local Utils = require("common.utils")
+local blend = Layout.blend
+local wrap = Utils.wrap
+local display_len = Utils.display_len
+local sanitize_utf8 = Utils.sanitize_utf8
+local fit_path = Utils.fit_path
+local spans_len = Layout.spans_len
+local pad_spans = Layout.pad_spans
+local restyle = Layout.restyle
+local with_bg = Layout.with_bg
 
 local COMMENT_MARK = "● "
 local COMMENT_BAR = "    ┃ "
@@ -40,42 +55,10 @@ local comments = {}
 
 --- shell helpers -----------------------------------------------------------
 
-local function sh_quote(s)
-  return "'" .. s:gsub("'", "'\\''") .. "'"
-end
+local sh_quote = Shell.quote
 
--- Runs a shell command, returns trimmed stdout or nil, err.
-local function run(cmd)
-  local id = maki.fn.jobstart(cmd)
-  local res = maki.fn.jobwait(id, 15000)
-  if not res then
-    return nil, "timed out: " .. cmd
-  end
-  -- git diff exits 1 when files differ (--no-index); only treat >1 as failure.
-  if res.exit_code > 1 then
-    local err = (res.stderr or ""):match("^%s*(.-)%s*$")
-    return nil, err ~= "" and err or ("exit " .. res.exit_code)
-  end
-  return res.stdout or ""
-end
-
---- colors ------------------------------------------------------------------
-
-local function hex_rgb(hex)
-  local h = hex:gsub("#", "")
-  return tonumber(h:sub(1, 2), 16), tonumber(h:sub(3, 4), 16), tonumber(h:sub(5, 6), 16)
-end
-
--- Mix color `top` into `base` by fraction t (0..1). Both "#rrggbb".
-local function blend(base, top, t)
-  local br, bg_, bb = hex_rgb(base)
-  local tr, tg, tb = hex_rgb(top)
-  return string.format(
-    "#%02x%02x%02x",
-    math.floor(br + (tr - br) * t + 0.5),
-    math.floor(bg_ + (tg - bg_) * t + 0.5),
-    math.floor(bb + (tb - bb) * t + 0.5)
-  )
+local function run(cmd, opts)
+  return Shell.run(cmd, opts)
 end
 
 local tints -- { add, del, sel } computed lazily from the theme background
@@ -100,6 +83,7 @@ end
 --- git plumbing ------------------------------------------------------------
 
 local function comment_count(change)
+  if Comments.count_for_file(comments, change.path) == 0 then return 0 end
   local n = 0
   for _, c in ipairs(comments) do
     if c.file == change.path and c.commit == change.commit then
@@ -275,7 +259,8 @@ local function get_diff(change)
   else
     cmd = "git diff --no-color HEAD -- " .. sh_quote(change.path)
   end
-  local raw, err = run(cmd)
+  local raw, err = run(cmd, change.untracked and not change.commit
+    and { ok_exit_codes = { 0, 1 } } or nil)
   if not raw then
     return nil, err
   end
@@ -287,7 +272,6 @@ end
 -- Highlights the code text of every non-hunk diff line in a single call.
 -- Returns map: dline idx -> spans ({ {text, style}, ... }), or nil.
 local function highlight_dlines(path, dlines)
-  local lang = path:match("%.([%w_]+)$") or path:match("([^/]+)$") or ""
   local code, idxs = {}, {}
   for i, dl in ipairs(dlines) do
     if dl.kind ~= "hunk" then
@@ -295,18 +279,8 @@ local function highlight_dlines(path, dlines)
       idxs[#idxs + 1] = i
     end
   end
-  if #code == 0 then
-    return nil
-  end
-  local ok, styled = pcall(
-    maki.ui.highlight,
-    table.concat(code, "\n"),
-    lang,
-    { independent = true }
-  )
-  if not ok or type(styled) ~= "table" or #styled ~= #code then
-    return nil
-  end
+  local styled = Highlight.highlight_file(path, code)
+  if not styled then return nil end
   local hl = {}
   for j, spans in ipairs(styled) do
     hl[idxs[j]] = spans
@@ -451,154 +425,10 @@ local function submit(state)
   return true
 end
 
---- span helpers ------------------------------------------------------------
-
-local function wrap(text, width)
-  local lines = {}
-  for raw in (text .. "\n"):gmatch("(.-)\n") do
-    if raw == "" then
-      lines[#lines + 1] = ""
-    end
-    while #raw > 0 do
-      if #raw <= width then
-        lines[#lines + 1] = raw
-        break
-      end
-      local cut = width
-      for i = width, math.max(width - 20, 1), -1 do
-        if raw:sub(i, i) == " " then
-          cut = i
-          break
-        end
-      end
-      lines[#lines + 1] = raw:sub(1, cut)
-      raw = raw:sub(cut + 1):gsub("^%s+", "")
-    end
-  end
-  return lines
-end
-
-local function display_len(s)
-  local ok, n = pcall(utf8.len, s)
-  if ok and n then
-    return n
-  end
-  return #s
-end
-
-local function sanitize_utf8(s)
-  if not s or s == "" then return s end
-  local ok = pcall(utf8.len, s)
-  if ok then return s end
-  -- Extract valid UTF-8 characters, skip invalid bytes
-  local out, i, n = {}, 1, #s
-  while i <= n do
-    local ok, next = pcall(utf8.offset, s, 1, i)
-    if ok then
-      out[#out + 1] = s:sub(i, next - 1)
-      i = next
-    else
-      i = i + 1
-    end
-  end
-  return table.concat(out)
-end
-
-local function spans_len(spans)
-  local n = 0
-  for _, sp in ipairs(spans) do
-    n = n + display_len(sp[1])
-  end
-  return n
-end
-
--- Pads `spans` with spaces (styled `style`) up to `width` columns.
-local function pad_spans(spans, width, style)
-  local n = spans_len(spans)
-  if n < width then
-    spans[#spans + 1] = { string.rep(" ", width - n), style or "" }
-  end
-  return spans
-end
-
--- Restyles every span with `style`.
-local function restyle(spans, style)
-  local out = {}
-  for _, sp in ipairs(spans) do
-    out[#out + 1] = { sp[1], style }
-  end
-  return out
-end
-
--- Returns copies of `spans` with `bg` added to each span's style,
--- keeping syntax foreground colors.
-local function with_bg(spans, bg)
-  local out = {}
-  for _, sp in ipairs(spans) do
-    local s = sp[2]
-    local ns = { bg = bg }
-    if type(s) == "table" then
-      ns.fg = s.fg
-      ns.bold = s.bold
-      ns.italic = s.italic
-      ns.underline = s.underline
-    end
-    out[#out + 1] = { sp[1], ns }
-  end
-  return out
-end
-
 --- rendering ---------------------------------------------------------------
 
 local STATUS_STYLE =
   { M = "warning", A = "diff_new", D = "diff_old", R = "accent", ["?"] = "diff_new" }
-
--- Shortens a path from the left to fit `max` columns.
-local function fit_path(path, max)
-  if display_len(path) <= max then
-    return path
-  end
-  return "…" .. path:sub(-(max - 1))
-end
-
--- Builds a directory tree from a flat change list. Single-child directory
--- chains are compressed into one node ("a/b/c").
-local function build_tree(changes)
-  local root = { dirs = {}, dorder = {}, files = {} }
-  for i, ch in ipairs(changes) do
-    local parts = {}
-    for s in ch.path:gmatch("[^/]+") do
-      parts[#parts + 1] = s
-    end
-    local node, prefix = root, ""
-    for j = 1, #parts - 1 do
-      prefix = prefix == "" and parts[j] or (prefix .. "/" .. parts[j])
-      local d = node.dirs[parts[j]]
-      if not d then
-        d = { name = parts[j], path = prefix, dirs = {}, dorder = {}, files = {} }
-        node.dirs[parts[j]] = d
-        node.dorder[#node.dorder + 1] = d
-      end
-      node = d
-    end
-    node.files[#node.files + 1] = { name = parts[#parts], idx = i }
-  end
-  local function compress(node)
-    for _, d in ipairs(node.dorder) do
-      while #d.dorder == 1 and #d.files == 0 do
-        local child = d.dorder[1]
-        d.name = d.name .. "/" .. child.name
-        d.path = child.path
-        d.dirs = child.dirs
-        d.dorder = child.dorder
-        d.files = child.files
-      end
-      compress(d)
-    end
-  end
-  compress(root)
-  return root
-end
 
 -- Renders a change list as a collapsible directory tree into `buf`.
 -- row_map values: number (index into `changes`) or { dir = path }.
@@ -671,7 +501,6 @@ local function render_change_list(state, buf, changes, cursor, active, empty_msg
     push(spans, f.idx)
   end
 
-  local walk
   local function emit_dir(d, depth)
     local isc = collapsed[d.path]
     local nfiles, ncoms = dir_stats(d)
@@ -695,20 +524,24 @@ local function render_change_list(state, buf, changes, cursor, active, empty_msg
       spans[#spans + 1] = { right, "dim" }
     end
     push(spans, { dir = d.path })
-    if not isc then
-      walk(d, depth + 1)
-    end
   end
 
-  walk = function(node, depth)
+  local tree = Tree.build_tree(changes)
+  local dirs = {}
+  local function collect(node)
     for _, d in ipairs(node.dorder) do
-      emit_dir(d, depth)
-    end
-    for _, f in ipairs(node.files) do
-      emit_file(f, depth)
+      dirs[d.path] = d
+      collect(d)
     end
   end
-  walk(build_tree(changes), 0)
+  collect(tree)
+  for _, row in ipairs(Tree.flatten(tree, collapsed)) do
+    if row.dir then
+      emit_dir(dirs[row.dir], row.depth)
+    else
+      emit_file(row, row.depth)
+    end
+  end
 
   buf:set_lines(lines)
   return row_map
@@ -1272,7 +1105,7 @@ end
 -- Toggles a directory row in the files / commit-files tree.
 local function toggle_dir(state, dir)
   local set = state.pane == "commits" and state.ccollapsed or state.fcollapsed
-  set[dir] = not set[dir] and true or nil
+  Tree.toggle_dir(set, dir)
   redraw(state)
 end
 
@@ -1318,7 +1151,7 @@ local function delete_selected_comment(state)
     maki.ui.flash("No comment selected")
     return
   end
-  table.remove(comments, idx)
+  Comments.remove(comments, idx)
   maki.ui.flash("Comment deleted")
   if state.mcursor > 1 then
     state.mcursor = state.mcursor - 1
@@ -1461,8 +1294,8 @@ local function save_comment(state)
   if e.existing_idx then
     comments[e.existing_idx].text = text
   else
-    comments[#comments + 1] =
-      make_comment(state.change, state.dlines, e.from, e.to, text)
+    (Comments and Comments.add or table.insert)(comments,
+      make_comment(state.change, state.dlines, e.from, e.to, text))
   end
   redraw(state)
 end
@@ -1474,7 +1307,7 @@ local function delete_comment(state)
   end
   local _, idx = comment_at(state.change, dl)
   if idx then
-    table.remove(comments, idx)
+    Comments.remove(comments, idx)
     maki.ui.flash("Comment deleted")
     redraw(state)
   else
@@ -1485,13 +1318,8 @@ end
 --- windows -----------------------------------------------------------------
 
 local function layout()
-  local sz = maki.ui.terminal_size()
-  local w = math.floor(sz.cols * 0.94)
-  local h = math.floor(sz.rows * 0.86)
-  local lw = math.max(28, math.min(46, math.floor(w * 0.30)))
-  local rw = w - lw
-  local row = math.max(math.floor((sz.rows - h) / 2) - 1, 0)
-  local col = math.floor((sz.cols - w) / 2)
+  local base = Layout.sizing()
+  local lw, rw, h, row, col = base.lw, base.rw, base.h, base.row, base.col
   local fh = math.max(math.floor(h * 0.38), 5)
   local ch = math.max(math.floor(h * 0.34), 5)
   local mh = math.max(h - fh - ch, 4)

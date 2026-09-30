@@ -1,4 +1,4 @@
-local path = arg[1] or "lua/maki_review/init.lua"
+local path = arg[1] or "lua/review/init.lua"
 local file = assert(io.open(path, "r"))
 local source = file:read("*a")
 file:close()
