@@ -900,6 +900,7 @@ local function redraw(state)
 
   panel_cfg(state.fwin, " Files (" .. #state.wchanges .. ") ", state.pane == "files" and not state.centry, {
     { "Enter", "diff" },
+    { "e", "edit" },
     { "s", "submit " .. #comments },
     { "Esc", "close" },
   })
@@ -1034,6 +1035,46 @@ local function refresh(state)
   redraw(state) -- rebuild row maps before reloading the preview
   load_preview(state)
   redraw(state)
+end
+
+local function edit_selected_file(state)
+  local selected = state.frow_map[state.fcursor]
+  local change = type(selected) == "number" and state.wchanges[selected]
+  local selected_path = change and not change.commit and change.path
+  if not selected_path then
+    maki.ui.flash("Select a working-tree file to edit, not a directory")
+    return
+  end
+  local path
+  if change.untracked then
+    path = maki.fs.abspath("./" .. selected_path)
+  else
+    local root, root_err = run("git rev-parse --show-toplevel")
+    root = root and root:gsub("[\r\n]+$", "")
+    if not root or root == "" then
+      maki.ui.flash("Cannot edit file: " .. tostring(root_err or "Git repository root is empty"))
+      return
+    end
+    path = root .. "/" .. selected_path
+  end
+  local ok, meta, err = pcall(maki.fs.metadata, path)
+  if not ok or not meta then
+    maki.ui.flash("Cannot edit file: " .. tostring(err or (not ok and meta) or "File no longer exists"))
+    return
+  end
+  if not meta.is_file then
+    maki.ui.flash("Cannot edit file: Not a regular file")
+    return
+  end
+  local editor_ok, code = pcall(maki.ui.open_editor, path)
+  refresh(state)
+  if not editor_ok then
+    maki.ui.flash("Editor failed: " .. tostring(code))
+  elseif code == -1 then
+    maki.ui.flash("Editor could not be opened; check VISUAL or EDITOR")
+  elseif code ~= 0 then
+    maki.ui.flash("Editor exited with code " .. tostring(code))
+  end
 end
 
 --- pane switching ----------------------------------------------------------
@@ -1442,6 +1483,8 @@ local function open_review()
       jump(state, true)
     elseif key == "<Tab>" then
       set_pane(state, state.pane == "diff" and state.src or PANE_NEXT[state.pane])
+    elseif key == "e" and state.pane == "files" then
+      edit_selected_file(state)
     elseif key == "s" then
       if submit(state) then
         return

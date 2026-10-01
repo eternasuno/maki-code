@@ -383,7 +383,7 @@ local function redraw(state)
   state.fwin:set_config({
     title = " Files (" .. #state.paths .. ") ",
     border = state.pane == "files" and "double" or "rounded",
-    footer = { { "Enter", "open" }, { "Tab", "focus" }, { "r", "refresh" } },
+    footer = { { "Enter", "open" }, { "e", "edit" }, { "Tab", "focus" }, { "r", "refresh" } },
   })
   state.mwin:set_config({
     title = " Comments (" .. #store .. ") ",
@@ -430,6 +430,35 @@ local function refresh(state)
   end
 end
 
+local function edit_selected_file(state)
+  local row = state.rows[state.file_cursor]
+  local selected_path = row and row.idx and state.paths[row.idx]
+  if not selected_path then
+    maki.ui.flash("Select a working-tree file to edit, not a directory")
+    return
+  end
+  local path = maki.fs.abspath("./" .. selected_path)
+  local ok, meta, err = pcall(maki.fs.metadata, path)
+  if not ok or not meta then
+    maki.ui.flash("Cannot edit file: " .. tostring(err or (not ok and meta) or "File no longer exists"))
+    return
+  end
+  if not meta.is_file then
+    maki.ui.flash("Cannot edit file: Not a regular file")
+    return
+  end
+  local editor_ok, code = pcall(maki.ui.open_editor, path)
+  refresh(state)
+  load_source(state, selected_path, state.file == selected_path and state.line or 1)
+  if not editor_ok then
+    maki.ui.flash("Editor failed: " .. tostring(code))
+  elseif code == -1 then
+    maki.ui.flash("Editor could not be opened; check VISUAL or EDITOR")
+  elseif code ~= 0 then
+    maki.ui.flash("Editor exited with code " .. tostring(code))
+  end
+end
+
 local function navigate(state, delta, endpoint)
   if state.pane == "files" then
     state.file_cursor = endpoint or clamp(state.file_cursor + delta, #state.rows)
@@ -460,6 +489,8 @@ local function handle_key(state, key)
     return true
   elseif key == "s" then
     return submit()
+  elseif key == "e" and state.pane == "files" then
+    edit_selected_file(state)
   elseif key == "r" then
     refresh(state)
   elseif key == "<Tab>" then

@@ -103,9 +103,16 @@ local function fixture(paths, sources)
       end,
     },
     fs = {
+      abspath = function(path)
+        return "/project/" .. path:sub(3)
+      end,
       metadata = function(path)
-        eq(path:sub(1, 2), "./")
-        path = path:sub(3)
+        if path:sub(1, 9) == "/project/" then
+          path = path:sub(10)
+        else
+          eq(path:sub(1, 2), "./")
+          path = path:sub(3)
+        end
         if f.meta_error then
           error(f.meta_error)
         end
@@ -135,6 +142,17 @@ local function fixture(paths, sources)
       end,
     },
     ui = {
+      open_editor = function(path)
+        f.editor_paths = f.editor_paths or {}
+        f.editor_paths[#f.editor_paths + 1] = path
+        if f.edit then
+          f.edit(path)
+        end
+        if f.editor_error then
+          error(f.editor_error)
+        end
+        return f.editor_code or 0
+      end,
       terminal_size = function()
         return { cols = f.size.cols, rows = f.size.rows }
       end,
@@ -237,6 +255,87 @@ test("code and complete review setup are idempotent", function()
   review.setup()
   eq(f.registrations["/review"], 1)
   eq(f.autocmds, 1)
+end)
+
+for _, code in ipairs({ 0, 7, -1 }) do
+  test("Files external edit reloads actual contents, exit=" .. code, function()
+    local f = fixture({ "dir/a file.lua" }, { ["dir/a file.lua"] = "before" })
+    f.editor_code = code
+    f.edit = function(path)
+      eq(path, "/project/dir/a file.lua")
+      f.sources["dir/a file.lua"] = "after editing"
+      f.paths[#f.paths + 1] = "new.lua"
+    end
+    f:key("e")
+    f:check(function()
+      eq(#f.editor_paths, 1)
+      contains(f:text("Source"), "after editing")
+      contains(f:text("Files"), "new.lua")
+      if code ~= 0 then
+        contains(f.flashes[#f.flashes], code == -1 and "could not be opened" or "code 7")
+      end
+    end)
+    f:key("q")
+    f:run()
+  end)
+end
+
+for _, mode in ipairs({ "missing", "directory", "meta_error" }) do
+  test("Files edit rejects " .. mode, function()
+    local f = fixture()
+    f:check(function()
+      f[mode] = mode == "missing" and "a.lua" or mode == "meta_error" and "metadata unavailable" or true
+    end)
+    f:key("e")
+    f:check(function()
+      eq(f.editor_paths, nil)
+      contains(f.flashes[#f.flashes], "Cannot edit file:")
+    end)
+    f:key("q")
+    f:run()
+  end)
+end
+
+test("directory row never edits the previously previewed file", function()
+  local f = fixture({ "dir/a.lua" })
+  f:key("g")
+  f:key("e")
+  f:check(function()
+    eq(f.editor_paths, nil)
+    contains(f.flashes[#f.flashes], "not a directory")
+  end)
+  f:key("q")
+  f:run()
+end)
+
+test("external editor exception still reloads changes and reports failure", function()
+  local f = fixture()
+  f.editor_error = "editor unavailable"
+  f.edit = function()
+    f.sources["a.lua"] = "saved before failure"
+  end
+  f:key("e")
+  f:check(function()
+    contains(f:text("Source"), "saved before failure")
+    contains(f.flashes[#f.flashes], "Editor failed:")
+  end)
+  f:key("q")
+  f:run()
+end)
+
+test("e is ignored in Source and inline comment editor", function()
+  local f = fixture()
+  f:key("<CR>")
+  f:key("e")
+  f:key("c")
+  f:key("e")
+  f:key("<CR>")
+  f:check(function()
+    eq(f.editor_paths, nil)
+    contains(f:text("Comments"), "a.lua:1 e")
+  end)
+  f:key("q")
+  f:run()
 end)
 
 test("project listing deduplicates sorts and compresses directories", function()

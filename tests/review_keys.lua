@@ -162,4 +162,153 @@ test("navigation comparisons use canonical keys only", function()
   end
 end)
 
+local editor_source = extract("local function refresh(state)", "--- pane switching")
+local edit_dispatch = extract('    elseif key == "e" and state.pane == "files" then', '    elseif key == "s" then')
+edit_dispatch = edit_dispatch:gsub("    elseif", "    if", 1)
+
+for _, untracked in ipairs({ false, true }) do
+  for _, code in ipairs({ 0, 9, -1, "throw" }) do
+    test(
+      "Files external editor refreshes diff after exit " .. tostring(code) .. ", untracked=" .. tostring(untracked),
+      function()
+        local opened, editor_flashes, reads = {}, {}, 0
+        local contents = "before"
+        local selected_path = untracked and "a file.lua" or "dir/a file.lua"
+        local root_reads = 0
+        local editor_env = setmetatable({
+          maki = {
+            fs = {
+              abspath = function(file_path)
+                assert(untracked and file_path == "./a file.lua")
+                return "/project/dir/" .. file_path:sub(3)
+              end,
+              metadata = function(file_path)
+                assert(file_path == "/project/dir/a file.lua")
+                return { is_file = true }
+              end,
+            },
+            ui = {
+              flash = function(text)
+                editor_flashes[#editor_flashes + 1] = text
+              end,
+              open_editor = function(file_path)
+                opened[#opened + 1] = file_path
+                contents = "after"
+                if code == "throw" then
+                  error("editor unavailable")
+                end
+                return code
+              end,
+            },
+          },
+          run = function(cmd)
+            assert(not untracked and cmd == "git rev-parse --show-toplevel")
+            root_reads = root_reads + 1
+            return "/project\n"
+          end,
+          git_changes = function()
+            reads = reads + 1
+            return { { path = selected_path, untracked = untracked } }
+          end,
+          git_log = function()
+            return {}
+          end,
+          redraw = function(current)
+            current.frow_map = { 1 }
+          end,
+          load_preview = function(current)
+            assert(next(current.cache) == nil)
+            current.preview = contents
+          end,
+        }, { __index = _G })
+        local edit = assert(
+          load(editor_source .. "return function(state, key)\n" .. edit_dispatch .. "end\nend", path, "t", editor_env)
+        )()
+        local current = {
+          pane = "files",
+          fcursor = 1,
+          frow_map = { 1 },
+          wchanges = { { path = selected_path, untracked = untracked } },
+          cache = { stale = true },
+        }
+        edit(current, "e")
+        assert(#opened == 1 and opened[1] == "/project/dir/a file.lua")
+        assert(reads == 1 and current.preview == "after")
+        assert(root_reads == (untracked and 0 or 1))
+        if code ~= 0 then
+          assert(#editor_flashes == 1 and editor_flashes[1]:find("Editor", 1, true))
+        end
+        for _, pane in ipairs({ "commits", "comments", "diff" }) do
+          current.pane = pane
+          edit(current, "e")
+        end
+        assert(#opened == 1)
+      end
+    )
+  end
+end
+
+for _, mode in ipairs({
+  "directory row",
+  "missing",
+  "directory file",
+  "metadata error",
+  "historical",
+  "root failure",
+  "empty root",
+  "blank root",
+}) do
+  test("Files external editor rejects " .. mode, function()
+    local editor_flashes, opens, metadata_reads = {}, 0, 0
+    local editor_env = setmetatable({
+      run = function(cmd)
+        assert(cmd == "git rev-parse --show-toplevel")
+        if mode == "root failure" then
+          return nil, "root unavailable"
+        elseif mode == "empty root" then
+          return ""
+        elseif mode == "blank root" then
+          return "\n"
+        end
+        return "/project\n"
+      end,
+      maki = {
+        fs = {
+          abspath = function()
+            return "/project/a.lua"
+          end,
+          metadata = function()
+            metadata_reads = metadata_reads + 1
+            if mode == "missing" then
+              return nil
+            elseif mode == "metadata error" then
+              error("metadata unavailable")
+            end
+            return { is_file = false }
+          end,
+        },
+        ui = {
+          flash = function(text)
+            editor_flashes[#editor_flashes + 1] = text
+          end,
+          open_editor = function()
+            opens = opens + 1
+          end,
+        },
+      },
+    }, { __index = _G })
+    local edit = assert(load(editor_source .. "return edit_selected_file", path, "t", editor_env))()
+    edit({
+      fcursor = 1,
+      frow_map = { mode == "directory row" and { dir = "dir" } or 1 },
+      wchanges = { { path = "a.lua", commit = mode == "historical" and "abc" or nil } },
+    })
+    assert(opens == 0 and #editor_flashes == 1)
+    if mode == "root failure" or mode == "empty root" or mode == "blank root" then
+      assert(metadata_reads == 0)
+      assert(editor_flashes[1]:find(mode == "root failure" and "root unavailable" or "root is empty", 1, true))
+    end
+  end)
+end
+
 print(tests .. " tests passed")
