@@ -894,11 +894,11 @@ local function redraw(state)
     win:set_config({
       title = title,
       border = active and "double" or "rounded",
-      footer = active and footer or { { "Tab", "focus" } },
+      footer = not state.centry and active and footer or {},
     })
   end
 
-  panel_cfg(state.fwin, " Files (" .. #state.wchanges .. ") ", state.pane == "files" and not state.centry, {
+  panel_cfg(state.fwin, " [1] Files (" .. #state.wchanges .. ") ", state.pane == "files" and not state.centry, {
     { "Enter", "diff" },
     { "e", "edit" },
     { "s", "submit " .. #comments },
@@ -907,26 +907,26 @@ local function redraw(state)
 
   local ctitle, cfooter
   if state.commit then
-    ctitle = " " .. state.commit.sha .. " (" .. #(state.commit_changes or {}) .. ") "
+    ctitle = " [2] Commits: " .. state.commit.sha .. " (" .. #(state.commit_changes or {}) .. ") "
     cfooter = { { "Enter", "diff" }, { "Esc", "back" } }
   else
-    ctitle = " Commits "
+    ctitle = " [2] Commits "
     cfooter = { { "Enter", "open" }, { "Esc", "close" } }
   end
   panel_cfg(state.cwin, ctitle, state.pane == "commits" and not state.centry, cfooter)
 
-  panel_cfg(state.mwin, " Comments (" .. #comments .. ") ", state.pane == "comments" and not state.centry, {
+  panel_cfg(state.mwin, " [3] Comments (" .. #comments .. ") ", state.pane == "comments" and not state.centry, {
     { "d", "delete" },
     { "s", "submit " .. #comments },
   })
 
-  local rtitle = " Diff "
+  local rtitle = " [4] Diff "
   if state.src == "commits" and not state.commit then
-    rtitle = state.sel_commit and (" Commit " .. state.sel_commit.sha .. " ") or " Commit "
+    rtitle = state.sel_commit and (" [4] Commit " .. state.sel_commit.sha .. " ") or " [4] Commit "
   elseif state.src == "comments" then
-    rtitle = " Comment "
+    rtitle = " [4] Comment "
   elseif state.change then
-    rtitle = " "
+    rtitle = " [4] Diff: "
       .. fit_path(state.change.path, math.max(state.rwidth - 14, 12))
       .. "  +"
       .. state.change.adds
@@ -1079,7 +1079,7 @@ end
 
 --- pane switching ----------------------------------------------------------
 
-local PANE_NEXT = { files = "commits", commits = "comments", comments = "files" }
+local PANE_KEYS = { ["1"] = "files", ["2"] = "commits", ["3"] = "comments", ["4"] = "diff" }
 
 local function set_pane(state, pane)
   if pane == "diff" and not state.dlines then
@@ -1481,8 +1481,8 @@ local function open_review()
       jump(state, false)
     elseif key == "G" or key == "<End>" then
       jump(state, true)
-    elseif key == "<Tab>" then
-      set_pane(state, state.pane == "diff" and state.src or PANE_NEXT[state.pane])
+    elseif PANE_KEYS[key] then
+      set_pane(state, PANE_KEYS[key])
     elseif key == "e" and state.pane == "files" then
       edit_selected_file(state)
     elseif key == "s" then
@@ -1503,7 +1503,7 @@ local function open_review()
           local sel = row_map[cursor]
           if type(sel) == "table" and sel.dir then
             toggle_dir(state, sel.dir)
-          else
+          elseif key ~= "l" then
             set_pane(state, "diff")
           end
         end
@@ -1545,7 +1545,7 @@ local function open_review()
         redraw(state)
       elseif key == "d" then
         delete_comment(state)
-      elseif key == "h" or key == "<Left>" or key == "<Esc>" then
+      elseif key == "<Left>" or key == "<Esc>" then
         if state.vstart then
           state.vstart = nil
           redraw(state)

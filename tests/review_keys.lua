@@ -11,18 +11,48 @@ end
 
 local make_comment = extract("local function make_comment(", "local function line_range_label(")
 local save_comment = extract("local function save_comment(", "local function delete_comment(")
-local dispatcher = extract("    local key = ev.key", "\n    if key ==")
-dispatcher = dispatcher:gsub("      continue\n", "      return\n")
+local dispatcher = extract("    local key = ev.key", "\n  end\n\n  for _, w in ipairs")
+dispatcher = dispatcher:gsub("%f[%a]continue%f[%A]", "return"):gsub("%f[%a]break%f[%A]", "return")
+local panes = extract("local PANE_KEYS =", "local function toggle_dir(")
 
+local flashes = {}
 local env = setmetatable({
   comments = {},
   TextInput = { Result = { IGNORED = "ignored" } },
+  maki = { ui = {
+    flash = function(message)
+      flashes[#flashes + 1] = message
+    end,
+  } },
+  load_preview = function(current)
+    current.previews = (current.previews or 0) + 1
+  end,
+  active_view = function(current)
+    return 1, current.rows or { 1 }
+  end,
+  enter_commit = function(current)
+    current.commit = {}
+  end,
+  leave_commit = function(current)
+    current.commit = nil
+  end,
+  toggle_dir = function(current, dir)
+    current.fcollapsed[dir] = not current.fcollapsed[dir]
+  end,
+  move = function(current, delta)
+    current.row = (current.row or 1) + delta
+  end,
   redraw = function(state)
     state.redraws = state.redraws + 1
   end,
 }, { __index = _G })
 local dispatch = assert(
-  load(make_comment .. save_comment .. "\nreturn function(state, ev)\n" .. dispatcher .. "\nend", path, "t", env)
+  load(
+    make_comment .. save_comment .. panes .. "\nreturn function(state, ev)\n" .. dispatcher .. "\nend",
+    path,
+    "t",
+    env
+  )
 )()
 
 local function state(text, existing_idx, result)
@@ -108,6 +138,10 @@ end
 
 for _, key in ipairs({
   "x",
+  "1",
+  "2",
+  "3",
+  "4",
   "q",
   "c",
   "<Space>",
@@ -153,7 +187,6 @@ test("navigation comparisons use canonical keys only", function()
     pagedown = "<PageDown>",
     home = "<Home>",
     ["end"] = "<End>",
-    tab = "<Tab>",
     right = "<Right>",
     left = "<Left>",
   }) do
@@ -310,5 +343,69 @@ for _, mode in ipairs({
     end
   end)
 end
+
+test("numbers select panes and clear selection while retaining diff source", function()
+  local current = { pane = "files", src = "files", dlines = {}, redraws = 0 }
+  for _, pair in ipairs({ { "2", "commits" }, { "3", "comments" }, { "1", "files" }, { "4", "diff" } }) do
+    current.vstart = 1
+    press(current, pair[1])
+    assert(current.pane == pair[2] and current.vstart == nil)
+  end
+  assert(current.src == "files" and current.previews == 3)
+end)
+
+test("number four preserves no-diff guard", function()
+  local current = { pane = "files", src = "files", vstart = 1, redraws = 0 }
+  press(current, "4")
+  assert(current.pane == "files" and current.vstart == 1 and current.redraws == 0)
+  assert(flashes[#flashes] == "No diff to focus")
+end)
+
+test("Tab h l do not switch panes and j k move rows", function()
+  for _, pane in ipairs({ "files", "commits", "comments", "diff" }) do
+    local current = { pane = pane, src = "files", commit = {}, fcollapsed = {}, ccollapsed = {}, redraws = 0 }
+    for _, key in ipairs({ "<Tab>", "h", "l" }) do
+      press(current, key)
+      assert(current.pane == pane)
+    end
+    press(current, "j")
+    assert(current.row == 2)
+    press(current, "k")
+    assert(current.row == 1)
+  end
+end)
+
+test("commit hierarchy and arrow navigation remain available", function()
+  local current = { pane = "commits", src = "commits", redraws = 0, fcollapsed = {}, ccollapsed = {} }
+  press(current, "l")
+  assert(current.commit and current.pane == "commits")
+  press(current, "h")
+  assert(not current.commit and current.pane == "commits")
+  current.pane, current.src, current.dlines = "files", "files", {}
+  press(current, "<Right>")
+  assert(current.pane == "diff")
+  press(current, "<Left>")
+  assert(current.pane == "files")
+  current.rows = { { dir = "src" } }
+  press(current, "h")
+  assert(current.fcollapsed.src)
+  press(current, "l")
+  assert(not current.fcollapsed.src and current.pane == "files")
+end)
+
+test("pane numbers appear only in bracketed titles", function()
+  local code_file = assert(io.open("lua/code/init.lua", "r"))
+  local code_source = code_file:read("*a")
+  code_file:close()
+  for _, entry in ipairs({
+    { code_source, { "[1] Files", "[2] Comments", "[3] Source" } },
+    { source, { "[1] Files", "[2] Commits", "[3] Comments", "[4] Diff", "[4] Commit", "[4] Comment" } },
+  }) do
+    for _, title in ipairs(entry[2]) do
+      assert(entry[1]:find(title, 1, true), "missing title: " .. title)
+    end
+    assert(not entry[1]:find("1/2/3", 1, true), "numeric shortcuts remain in footer")
+  end
+end)
 
 print(tests .. " tests passed")

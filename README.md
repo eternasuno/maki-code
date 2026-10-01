@@ -16,9 +16,12 @@ Both file trees are collapsible and compress single-directory chains such as `sr
 | `j` / `Down`, `k` / `Up` | Move through files, comments, or source/diff lines |
 | `PageUp` / `PageDown` | Move one page |
 | `g` / `Home`, `G` / `End` | First / last item or line |
-| `Tab` | `/review`: cycle left panels (from diff, return left); `/code`: Files → Comments → Source → Files |
-| `Enter` / `l` / `Right` | Toggle directory or open file; `/review`: open commit; `/code` Comments: jump to the comment's file and line |
-| `h` / `Left` | Collapse selected directory or return from source/diff to the left |
+| `1` / `2` / `3` | `/code`: Files / Comments / Source; `/review`: Files / Commits / Comments |
+| `4` | `/review`: focus Diff (only when a diff is available) |
+| `Enter` / `Right` | Toggle directory or open file; `/review`: open commit; `/code` Comments: jump to the comment's file and line |
+| `l` | Toggle directory; `/review` Commits: enter the selected commit's files (does not switch panes) |
+| `h` | Collapse selected directory; `/review` Commits: return to the commit list (does not switch panes) |
+| `Left` | Collapse selected directory, return to the commit list, or return from source/diff to the left |
 | `Esc` | Cancel selection/editor, return left, or close |
 | `e` | Files only: edit the selected working-tree file in the default external editor |
 | `c` | Add or edit a comment on the current source/diff line |
@@ -30,9 +33,9 @@ Both file trees are collapsible and compress single-directory chains such as `sr
 
 In Files, `e` opens the selected existing regular file using `VISUAL`, falling back to `EDITOR`. Maki suspends the TUI and waits for the editor to exit, then reloads source/diffs even after a nonzero exit. Directories, missing files, and historical commit versions are not opened; editor failures are reported.
 
-In the inline comment editor, `Enter` saves and `Esc` / `Ctrl-C` cancels. TextInput handles editing keys and pasted text. Blank comments are not saved. Editing an existing comment preserves its original range and context snapshot. Deletion updates the UI immediately.
+In the inline comment editor, `Enter` saves and `Esc` / `Ctrl-C` cancels. TextInput handles editing keys, digits, and pasted text; number shortcuts do not switch panes while editing. Outside the editor, number shortcuts select the numbered panes and clear range selection on a pane change. `Tab` no longer switches panes; `j` / `k` still move rows. Blank comments are not saved. Editing an existing comment preserves its original range and context snapshot. Deletion updates the UI immediately.
 
-`/code` Comments entries show `file:line` or `file:start-end`, plus a short text preview when space permits. `Enter` / `l` jumps to the corresponding source line. `/review` retains its comment detail view.
+`/code` Comments entries show `file:line` or `file:start-end`, plus a short text preview when space permits. `Enter` / `Right` jumps to the corresponding source line. `/review` retains its comment detail view.
 
 ## Comments and submission
 
