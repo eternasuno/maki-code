@@ -381,18 +381,19 @@ local function redraw(state)
   state.sbuf:set_lines(source)
   state.swin:set_cursor(cursor)
   state.fwin:set_config({
-    title = " Files (" .. #state.paths .. ") ",
+    title = " [1] Files (" .. #state.paths .. ") ",
     border = state.pane == "files" and "double" or "rounded",
-    footer = { { "Enter", "open" }, { "Tab", "focus" }, { "r", "refresh" } },
+    footer = { { "Enter", "open" }, { "r", "refresh" } },
   })
   state.mwin:set_config({
-    title = " Comments (" .. #store .. ") ",
+    title = " [2] Comments (" .. #store .. ") ",
     border = state.pane == "comments" and "double" or "rounded",
     footer = { { "Enter", "jump" }, { "d", "delete" }, { "s", "submit" } },
   })
   state.swin:set_config({
-    title = state.file and (" " .. Utils.fit_path(display(state.file), math.max(1, state.source_width - 4)) .. " ")
-      or " Source ",
+    title = state.file
+        and (" [3] Source: " .. Utils.fit_path(display(state.file), math.max(1, state.source_width - 14)) .. " ")
+      or " [3] Source ",
     border = state.pane == "source" and "double" or "rounded",
     footer = state.editor and { { "Enter", "save" }, { "Esc", "cancel" } }
       or { { "c", "comment" }, { "v", "select" }, { "s", "submit" }, { "Esc", "back" } },
@@ -462,8 +463,8 @@ local function handle_key(state, key)
     return submit()
   elseif key == "r" then
     refresh(state)
-  elseif key == "<Tab>" then
-    state.pane = ({ files = "comments", comments = "source", source = "files" })[state.pane]
+  elseif key == "1" or key == "2" or key == "3" then
+    state.pane = ({ ["1"] = "files", ["2"] = "comments", ["3"] = "source" })[key]
     state.anchor = nil
   elseif key == "j" or key == "<Down>" then
     navigate(state, 1)
@@ -486,7 +487,7 @@ local function handle_key(state, key)
       return true
     end
   elseif key == "h" or key == "<Left>" then
-    if state.pane == "source" then
+    if state.pane == "source" and key == "<Left>" then
       state.pane, state.anchor = "files", nil
     elseif state.pane == "files" then
       local row = state.rows[state.file_cursor]
@@ -508,11 +509,11 @@ local function handle_key(state, key)
       local row = state.rows[state.file_cursor]
       if row and row.dir then
         Tree.toggle_dir(state.collapsed, row.dir)
-      elseif row and row.idx then
+      elseif row and row.idx and key ~= "l" then
         load_source(state, state.paths[row.idx], state.file == state.paths[row.idx] and state.line or 1)
         state.pane = "source"
       end
-    elseif state.pane == "comments" then
+    elseif state.pane == "comments" and key ~= "l" then
       local comment = store[state.comment_cursor]
       if comment then
         load_source(state, comment.file, comment.start_line)
