@@ -21,6 +21,7 @@ local open_panel = Layout.open_panel
 local Tree = require("common.tree")
 local build_tree = Tree.build_tree
 local Comments = require("common.comments")
+local Utils = require("common.utils")
 local add_comment, update_comment = Comments.add, Comments.update
 
 local function fixture(paths, sources)
@@ -254,6 +255,11 @@ local function fixture(paths, sources)
         return {
           content = {},
           set_lines = function(self, lines)
+            for _, row in ipairs(lines) do
+              for _, span in ipairs(row) do
+                eq(Utils.sanitize_utf8(span[1]), span[1])
+              end
+            end
             self.content = lines
           end,
         }
@@ -670,6 +676,67 @@ test("single range edit cancel blank and delete comments", function()
   f:key("q")
   f:run()
 end)
+
+for index, text in ipairs({ string.rep("中文", 30), string.rep("😀🚀", 30), string.rep("中文😀", 30) }) do
+  test("long UTF8 file and source comments save render and persist " .. index, function()
+    local f = fixture({ "a.lua" }, { ["a.lua"] = "first\nsecond" })
+    f.size.cols = 80
+    local function check_render()
+      local rows = f:win("Comments").buf.content
+      eq(#rows, 2)
+      for i, location in ipairs({ "a.lua", "a.lua:1" }) do
+        local label = rows[i][1][1]
+        eq(label:sub(1, #location + 1), location .. " ")
+        local preview = label:sub(#location + 2):gsub("%s+$", "")
+        local available = f:win("Comments").width - Utils.display_len(location) - 3
+        assert(#preview > 0 and #preview < #text, "Expected a shortened narrow preview")
+        eq(preview, text:sub(1, #preview))
+        assert(Utils.display_len(preview) <= available)
+        assert(Utils.display_len(preview) >= available - 1, "Preview lost complete characters")
+      end
+      local wrapped = {}
+      for _, row in ipairs(f:win("Source").buf.content) do
+        local body = row[1][1]:match("^    ┃ (.*)")
+        if body then
+          wrapped[#wrapped + 1] = body:gsub("%s+$", "")
+        end
+      end
+      assert(#wrapped > 1, "Expected source comment wrapping")
+      eq(table.concat(wrapped), text)
+    end
+    local function check_editor()
+      local found = false
+      for _, row in ipairs(f:win("Source").buf.content) do
+        if row[1][1]:sub(1, #"    │ ") == "    │ " then
+          eq(row[1][1], "    │ " .. text)
+          found = true
+        end
+      end
+      assert(found, "Expected complete saved text in reopened editor")
+    end
+    comment(f, text)
+    f:key("<CR>")
+    comment(f, text)
+    f:check(check_render)
+    f:key("q")
+    f:run()
+
+    f:check(check_render)
+    f:key("2")
+    f:key("c")
+    f:check(check_editor)
+    f:key("<Esc>")
+    f:key("j")
+    f:key("c")
+    f:check(check_editor)
+    f:key("<Esc>")
+    f:key("s")
+    f:run()
+    eq(#f.edits, 1)
+    contains(f.edits[1].text, "Target: file\nPath: a.lua\nComment: " .. text)
+    contains(f.edits[1].text, "Target: source\nFile: a.lua\nLines: 1-1\nComment: " .. text)
+  end)
+end
 
 test("comments numbered navigation jump edit and deletion", function()
   local f = fixture()

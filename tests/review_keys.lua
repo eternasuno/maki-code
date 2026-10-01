@@ -11,7 +11,7 @@ local function extract(first, last)
   return source:sub(start, finish - 1)
 end
 
-local dispatcher = extract("    local key = ev.key", "\n  end\n\n  for _, w in ipairs")
+local dispatcher = extract("    local key = ev.key", "\n  end\n")
 dispatcher = dispatcher:gsub("%f[%a]continue%f[%A]", "return"):gsub("%f[%a]break%f[%A]", "return")
 local panes = extract("local PANE_KEYS =", "local function toggle_dir(")
 
@@ -190,7 +190,7 @@ test("ignored input does not redraw", function()
 end)
 
 test("navigation comparisons use canonical keys only", function()
-  local navigation = extract('    if key == "<Up>" or key == "k" then', "  for _, w in ipairs")
+  local navigation = extract('    if key == "<Up>" or key == "k" then', "--- registration")
   for old, canonical in pairs({
     enter = "<CR>",
     esc = "<Esc>",
@@ -1000,5 +1000,175 @@ test("path editor renders without diff and mixed deletion refresh retain store",
   remove_mixed({ mcursor = 3, mrow_map = { [3] = 3 } })
   assert(#records == 4 and records[3].text == "ancestor")
 end)
+
+local function truncate_text(text, budget)
+  local width, finish = 0, 0
+  for char in text:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
+    local cells = Utils.display_len(char)
+    if width + cells > budget then
+      break
+    end
+    width = width + cells
+    finish = finish + #char
+  end
+  return { head = text:sub(1, finish), tail = text:sub(finish + 1) }
+end
+
+local function checked_buffer()
+  local buf = buffer()
+  local set_lines = buf.set_lines
+  function buf:set_lines(lines)
+    for _, row in ipairs(lines) do
+      for _, span in ipairs(row) do
+        assert(Utils.sanitize_utf8(span[1]) == span[1], "invalid UTF8")
+      end
+    end
+    set_lines(self, lines)
+  end
+  function buf:len()
+    return self.lines and #self.lines or 0
+  end
+  return buf
+end
+
+for index, text in ipairs({ string.rep("中文", 30), string.rep("😀🚀", 30), string.rep("中文😀", 30) }) do
+  test("save and production preview preserve full UTF8 text " .. index, function()
+    mixed_env.comments = {}
+    maki = { ui = { truncate_text = truncate_text } }
+    mixed_env.maki = maki
+    local save_env = setmetatable({
+      comments = mixed_env.comments,
+      Comments = Comments,
+      redraw = render_list,
+    }, { __index = _G })
+    local save = assert(
+      load(
+        extract("local function save_comment(", "local function delete_comment(") .. "return save_comment",
+        path,
+        "t",
+        save_env
+      )
+    )()
+    local current = state(text)
+    current.lwidth, current.pane, current.mcursor, current.mbuf = 40, "files", 1, checked_buffer()
+    save(current)
+    assert(mixed_env.comments[1].text == text and current.centry == nil)
+    local spans = current.mbuf.lines[1]
+    local preview = spans[#spans][1]:sub(2)
+    local avail = current.lwidth - 3 - Utils.display_len(spans[2][1]) - 2
+    assert(preview:sub(-#"…") == "…")
+    assert(Utils.sanitize_utf8(preview) == preview and Utils.display_len(preview) <= avail)
+    assert(Utils.display_len(text_of(current.mbuf)) <= current.lwidth)
+  end)
+end
+
+local loop_source = extract("local function open_review(", "--- registration")
+loop_source = loop_source:gsub("  while true do\n", "  while true do\n    do\n", 1)
+loop_source = loop_source:gsub("%f[%a]continue%f[%A]", "goto next_event")
+loop_source = loop_source:gsub("\n  end\n%s*end%s*$", "\n    end\n    ::next_event::\n  end\nend\n")
+local safe_source = extract("local function open_review_safe(", "local M =")
+
+for _, scenario in ipairs({ "initial redraw", "save redraw", "normal", "failing close" }) do
+  test("review lifecycle cleans every panel: " .. scenario, function()
+    local windows, errors, notices = {}, {}, {}
+    local store = { { target = { kind = "file", path = "a" }, text = "retained" } }
+    local full_text = string.rep("中文😀", 30)
+    local draws = 0
+    local lifecycle_env = setmetatable({
+      Comments = Comments,
+      comments = store,
+      PANE_KEYS = {},
+      git_changes = function()
+        return {}
+      end,
+      git_log = function()
+        return {}
+      end,
+      load_preview = function() end,
+      open_windows = function(current)
+        current.lwidth = 40
+        for _, name in ipairs({ "fwin", "cwin", "mwin", "rwin" }) do
+          local win = { calls = 0 }
+          function win:close()
+            self.calls = self.calls + 1
+            self.closed = true
+            if scenario == "failing close" and name == "fwin" then
+              error("close failure")
+            end
+          end
+          function win:recv()
+            if scenario == "save redraw" and not self.saved then
+              self.saved = true
+              current.centry = {
+                input = {
+                  value = function()
+                    return full_text
+                  end,
+                },
+                record = { target = { kind = "file", path = "a" } },
+              }
+              return { type = "key", key = "<CR>" }
+            end
+            return { type = "key", key = "q" }
+          end
+          windows[#windows + 1] = win
+          current[name] = win
+        end
+      end,
+      redraw = function(current)
+        draws = draws + 1
+        render_list(current)
+        if scenario == "initial redraw" or (scenario == "save redraw" and draws == 3) then
+          error(scenario .. " failure")
+        end
+      end,
+      maki = {
+        ui = {
+          buf = checked_buffer,
+          truncate_text = truncate_text,
+          flash = function(message)
+            notices[#notices + 1] = message
+          end,
+        },
+        log = {
+          error = function(message)
+            errors[#errors + 1] = message
+          end,
+        },
+      },
+    }, { __index = _G })
+    mixed_env.comments = store
+    mixed_env.maki = lifecycle_env.maki
+    maki = lifecycle_env.maki
+    local run = assert(
+      load(
+        extract("local function save_comment(", "local function delete_comment(")
+          .. loop_source
+          .. safe_source
+          .. "return open_review_safe",
+        path,
+        "t",
+        lifecycle_env
+      )
+    )()
+    run()
+    assert(#windows == 4)
+    for _, win in ipairs(windows) do
+      assert(win.closed and win.calls == 1, "panel not cleaned exactly once")
+    end
+    assert(lifecycle_env.comments == store and store[1].text == "retained")
+    if scenario == "save redraw" then
+      assert(#store == 2 and store[2].text == full_text)
+    else
+      assert(#store == 1)
+    end
+    local expected = scenario == "normal" and 0 or 1
+    assert(#errors == expected and #notices == expected)
+    if expected == 1 then
+      local message = scenario == "failing close" and "close failure" or scenario .. " failure"
+      assert(errors[1]:find(message, 1, true) and notices[1]:find(message, 1, true))
+    end
+  end)
+end
 
 print(tests .. " tests passed")

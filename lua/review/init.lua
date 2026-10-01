@@ -608,7 +608,7 @@ local function render_comment_list(state)
     if avail > 4 then
       local preview = c.text:gsub("%s+", " ")
       if display_len(preview) > avail then
-        preview = preview:sub(1, math.max(avail - 1, 1)) .. "…"
+        preview = maki.ui.truncate_text(preview, math.max(avail - 1, 1)).head .. "…"
       end
       spans[#spans + 1] = { " " .. preview, "dim" }
     end
@@ -1458,14 +1458,14 @@ end
 
 --- main loop ---------------------------------------------------------------
 
-local function open_review()
+local function open_review(state)
   local changes, err = git_changes()
   if not changes then
     maki.ui.flash(tostring(err))
     return
   end
 
-  local state = {
+  local initial = {
     fbuf = maki.ui.buf(),
     cbuf = maki.ui.buf(),
     mbuf = maki.ui.buf(),
@@ -1486,6 +1486,9 @@ local function open_review()
     ccollapsed = {},
     cache = {},
   }
+  for key, value in pairs(initial) do
+    state[key] = value
+  end
   open_windows(state)
   redraw(state) -- build row maps before the first preview
   for r = 1, state.fbuf:len() do
@@ -1632,21 +1635,30 @@ local function open_review()
       end
     end
   end
-
-  for _, w in ipairs({ "fwin", "cwin", "mwin", "rwin" }) do
-    if state[w] then
-      state[w]:close()
-    end
-  end
 end
 
 --- registration ------------------------------------------------------------
 
 local function open_review_safe()
-  local ok, err = pcall(open_review)
+  local state = {}
+  local ok, err = pcall(open_review, state)
+  local errors = {}
   if not ok then
-    maki.log.error("review crashed: " .. tostring(err))
-    maki.ui.flash("review error: " .. tostring(err))
+    errors[#errors + 1] = err
+  end
+  for _, w in ipairs({ "fwin", "cwin", "mwin", "rwin" }) do
+    if state[w] then
+      local closed, close_err = pcall(function()
+        state[w]:close()
+      end)
+      if not closed then
+        errors[#errors + 1] = close_err
+      end
+    end
+  end
+  for _, failure in ipairs(errors) do
+    maki.log.error("review crashed: " .. tostring(failure))
+    maki.ui.flash("review error: " .. tostring(failure))
   end
 end
 
