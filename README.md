@@ -24,14 +24,17 @@ Both file trees are collapsible and compress single-directory chains such as `sr
 | `l` | Toggle directory; `/review` Commits: enter the selected commit's files (does not switch panes) |
 | `h` | Collapse selected directory; `/review` Commits: return to the commit list (does not switch panes) |
 | `Left` | Collapse selected directory, return to the commit list, or return from source/diff to the left |
-| `Esc` | Cancel selection/editor, return left, or close |
+| `/` | `/code` Files: edit the filename search query |
+| `Esc` | Clear `/code` Files search if active; otherwise cancel selection/editor, return left, or close |
 | `e` | Files: edit the selected working-tree file; `/code` Source: edit the displayed file in the default external editor |
 | `c` | Add or edit a comment on the current source/diff line |
 | `v` | Toggle range selection; move to the other end, then press `c` |
 | `d` | Delete the current line's comment or the selected Comments entry |
 | `s` | Fill the current Maki chat input with this plugin’s comments; review and send manually |
 | `r` | Refresh; `/code` reloads the file tree and selected source; `/review` accepts this in the left panes |
-| `q` / `Ctrl-C` | Quit (in the editor, `Ctrl-C` cancels instead) |
+| `q` / `Ctrl-C` | Quit (in an editor, `Ctrl-C` cancels instead) |
+
+In `/code` Files, `/` starts a case-insensitive, literal substring search of filenames only (not directory names or file contents). The query appears in the Files title, and matching files retain their parent tree and collapsed-directory state. Typing and navigation use the cached file list; `r` refreshes the full Git listing and reapplies the query. While editing the query, shortcuts such as `j`, `k`, `r`, and digits are ordinary text; TextInput handles editing keys, and pasted text is sanitized to a single line. `Enter` keeps the filter and restores normal navigation; `Esc` / `Ctrl-C` clears it and leaves editing. `/` reopens the existing query. Outside search editing, `Esc` in Files clears a nonempty query before a subsequent `Esc` closes the browser. No matches clears the source preview.
 
 In Files, `e` opens the selected existing regular file using `VISUAL`, falling back to `EDITOR`. In `/code` Source, it opens the displayed file independently of the Files selection, then refreshes its contents while keeping Source focused and preserving the current line (clamped if the file shrinks). Comments ignores `e`; in the inline comment editor it is ordinary text. Maki suspends the TUI and waits for the editor to exit, then reloads source/diffs even after a nonzero exit. Directories, missing files, and historical commit versions are not opened; editor failures are reported.
 
