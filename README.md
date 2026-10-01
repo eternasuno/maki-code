@@ -23,7 +23,7 @@ Both file trees are collapsible and compress single-directory chains such as `sr
 | `h` | Collapse selected directory; `/review` Commits: return to the commit list (does not switch panes) |
 | `Left` | Collapse selected directory, return to the commit list, or return from source/diff to the left |
 | `Esc` | Cancel selection/editor, return left, or close |
-| `e` | Files only: edit the selected working-tree file in the default external editor |
+| `e` | Files: edit the selected working-tree file; `/code` Source: edit the displayed file in the default external editor |
 | `c` | Add or edit a comment on the current source/diff line |
 | `v` | Toggle range selection; move to the other end, then press `c` |
 | `d` | Delete the current line's comment or the selected Comments entry |
@@ -31,7 +31,7 @@ Both file trees are collapsible and compress single-directory chains such as `sr
 | `r` | Refresh; `/code` reloads both the file tree and selected source |
 | `q` / `Ctrl-C` | Quit (in the editor, `Ctrl-C` cancels instead) |
 
-In Files, `e` opens the selected existing regular file using `VISUAL`, falling back to `EDITOR`. Maki suspends the TUI and waits for the editor to exit, then reloads source/diffs even after a nonzero exit. Directories, missing files, and historical commit versions are not opened; editor failures are reported.
+In Files, `e` opens the selected existing regular file using `VISUAL`, falling back to `EDITOR`. In `/code` Source, it opens the displayed file independently of the Files selection, then refreshes its contents while keeping Source focused and preserving the current line (clamped if the file shrinks). Comments ignores `e`; in the inline comment editor it is ordinary text. Maki suspends the TUI and waits for the editor to exit, then reloads source/diffs even after a nonzero exit. Directories, missing files, and historical commit versions are not opened; editor failures are reported.
 
 In the inline comment editor, `Enter` saves and `Esc` / `Ctrl-C` cancels. TextInput handles editing keys, digits, and pasted text; number shortcuts do not switch panes while editing. Outside the editor, number shortcuts select the numbered panes and clear range selection on a pane change. `Tab` no longer switches panes; `j` / `k` still move rows. Blank comments are not saved. Editing an existing comment preserves its original range and context snapshot. Deletion updates the UI immediately.
 

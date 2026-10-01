@@ -396,7 +396,7 @@ local function redraw(state)
       or " [3] Source ",
     border = state.pane == "source" and "double" or "rounded",
     footer = state.editor and { { "Enter", "save" }, { "Esc", "cancel" } }
-      or { { "c", "comment" }, { "v", "select" }, { "s", "submit" }, { "Esc", "back" } },
+      or { { "e", "edit" }, { "c", "comment" }, { "v", "select" }, { "s", "submit" }, { "Esc", "back" } },
   })
 end
 
@@ -431,14 +431,20 @@ local function refresh(state)
   end
 end
 
-local function edit_selected_file(state)
-  local row = state.rows[state.file_cursor]
-  local selected_path = row and row.idx and state.paths[row.idx]
-  if not selected_path then
-    maki.ui.flash("Select a working-tree file to edit, not a directory")
+local function edit_file(state)
+  local target = state.file
+  if state.pane == "files" then
+    local row = state.rows[state.file_cursor]
+    target = row and row.idx and state.paths[row.idx]
+    if not target then
+      maki.ui.flash("Select a working-tree file to edit, not a directory")
+      return
+    end
+  elseif not target then
+    maki.ui.flash("No source file to edit")
     return
   end
-  local path = maki.fs.abspath("./" .. selected_path)
+  local path = maki.fs.abspath("./" .. target)
   local ok, meta, err = pcall(maki.fs.metadata, path)
   if not ok or not meta then
     maki.ui.flash("Cannot edit file: " .. tostring(err or (not ok and meta) or "File no longer exists"))
@@ -450,7 +456,7 @@ local function edit_selected_file(state)
   end
   local editor_ok, code = pcall(maki.ui.open_editor, path)
   refresh(state)
-  load_source(state, selected_path, state.file == selected_path and state.line or 1)
+  load_source(state, target, state.file == target and state.line or 1)
   if not editor_ok then
     maki.ui.flash("Editor failed: " .. tostring(code))
   elseif code == -1 then
@@ -490,8 +496,8 @@ local function handle_key(state, key)
     return true
   elseif key == "s" then
     return submit()
-  elseif key == "e" and state.pane == "files" then
-    edit_selected_file(state)
+  elseif key == "e" and (state.pane == "files" or state.pane == "source") then
+    edit_file(state)
   elseif key == "r" then
     refresh(state)
   elseif key == "1" or key == "2" or key == "3" then
