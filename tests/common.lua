@@ -15,7 +15,8 @@ local function test(name, fn)
 end
 local Shell = require("common.shell")
 local Tree = require("common.tree")
-local Utils = require("common.utils")
+local Text = require("common.text")
+local Input = require("common.input")
 local Highlight = require("common.highlight")
 local Layout = require("common.layout")
 local Comments = require("common.comments")
@@ -179,34 +180,34 @@ test("tree strings and branch depth", function()
 end)
 
 test("Unicode sanitation rejects malformed encodings preserves valid scalars", function()
-  eq(Utils.sanitize_utf8("é界😀é"), "é界😀é")
-  eq(Utils.sanitize_utf8("a\255\192\175\237\160\128\244\144\128\128b"), "ab")
-  eq(Utils.sanitize_utf8("a\226\130"), "a")
-  eq(Utils.sanitize_utf8(nil), nil)
+  eq(Text.sanitize_utf8("é界😀é"), "é界😀é")
+  eq(Text.sanitize_utf8("a\255\192\175\237\160\128\244\144\128\128b"), "ab")
+  eq(Text.sanitize_utf8("a\226\130"), "a")
+  eq(Text.sanitize_utf8(nil), nil)
 end)
 
 test("Unicode fallback cell widths and wrapping", function()
   maki = nil
-  eq(Utils.display_len("é界😀é"), 6)
-  local lines = Utils.wrap("界界éé\n\nhello world", 4)
+  eq(Text.display_len("é界😀é"), 6)
+  local lines = Text.wrap("界界éé\n\nhello world", 4)
   eq(lines[1], "界界")
   eq(lines[2], "éé")
   eq(lines[3], "")
   for _, line in ipairs(lines) do
-    assert(Utils.display_len(line) <= 4)
-    eq(Utils.sanitize_utf8(line), line)
+    assert(Text.display_len(line) <= 4)
+    eq(Text.sanitize_utf8(line), line)
   end
-  eq(table.concat(Utils.wrap("界", 0)), "界")
-  eq(Utils.wrap("", 4)[1], "")
+  eq(table.concat(Text.wrap("界", 0)), "界")
+  eq(Text.wrap("", 4)[1], "")
 end)
 
 test("Unicode fit uses cells keeps suffix and handles zero", function()
   maki = nil
-  eq(Utils.fit_path("folder/界é", 4), "…界é")
-  eq(Utils.fit_path("é界", 3), "é界")
-  eq(Utils.fit_path("anything", 0), "")
-  eq(Utils.fit_path("anything", 1), "…")
-  eq(Utils.fit_path("\255abc", 3), "abc")
+  eq(Text.fit_path("folder/界é", 4), "…界é")
+  eq(Text.fit_path("é界", 3), "é界")
+  eq(Text.fit_path("anything", 0), "")
+  eq(Text.fit_path("anything", 1), "…")
+  eq(Text.fit_path("\255abc", 3), "abc")
 end)
 
 test("display width native result and error fallback", function()
@@ -216,15 +217,15 @@ test("display width native result and error fallback", function()
       return 7
     end,
   } }
-  eq(Utils.display_len("é"), 7)
+  eq(Text.display_len("é"), 7)
   maki.ui.display_width = function()
     error("unavailable")
   end
-  eq(Utils.display_len("界"), 2)
+  eq(Text.display_len("界"), 2)
   maki.ui.display_width = function()
     return "bad"
   end
-  eq(Utils.display_len("é"), 1)
+  eq(Text.display_len("é"), 1)
 end)
 
 test("highlight successful full-file independent language", function()
@@ -287,14 +288,13 @@ test("highlight unavailable errors malformed result and mismatch fallback", func
   eq(Highlight.highlight_file("a", {}), nil)
 end)
 
-test("comments add update remove list and per-file count", function()
+test("comments add update remove and versions", function()
   local store = {}
   local record = { file = "a", text = "first" }
   eq(Comments.add(store, record), 1)
   eq(Comments.add(store, { file = "b" }), 2)
-  eq(Comments.count_for_file(store, "a"), 1)
-  eq(Comments.count_for_file(store, "missing"), 0)
-  eq(Comments.list(store), store)
+  eq(Comments.version(store), 2)
+  eq(Comments.count_for_path(store, "missing"), 0)
   local replacement = { file = "a", text = "edited" }
   eq(Comments.update(store, 1, replacement), replacement)
   eq(Comments.update(store, 3, replacement), nil)
@@ -344,7 +344,6 @@ test("comments mixed targets exact subtree counts and locations", function()
   eq(Comments.count_under_path(store, "src/api"), 2)
   eq(Comments.remove(store, 2), file)
   eq(Comments.count_for_path(store, "src/api/foo.lua"), 1)
-  eq(Comments.list(store), store)
 end)
 
 test("layout spans are padded and styles copied without mutation", function()
@@ -413,8 +412,8 @@ test("panel titles fit tiny widths Unicode and long paths", function()
       for _, active in ipairs({ false, true }) do
         local cfg = Layout.panel_config(width, title, active, {})
         eq(cfg.border, "none")
-        assert(Utils.display_len(cfg.title) <= math.max(width - 2, 0))
-        eq(Utils.sanitize_utf8(cfg.title), cfg.title)
+        assert(Text.display_len(cfg.title) <= math.max(width - 2, 0))
+        eq(Text.sanitize_utf8(cfg.title), cfg.title)
         eq(cfg.active, active)
       end
     end
@@ -432,7 +431,7 @@ test("panel footer keeps only the full prefix fitting rendered cells", function(
       local cfg = Layout.panel_config(width, " title ", true, footer)
       local expected, cells = 0, 1
       for _, pair in ipairs(footer) do
-        local next_cells = cells + Utils.display_len(pair[1]) + Utils.display_len(pair[2]) + 2
+        local next_cells = cells + Text.display_len(pair[1]) + Text.display_len(pair[2]) + 2
         if next_cells > math.max(width - 2, 0) then
           break
         end
@@ -479,18 +478,6 @@ test("panel frame colors corners geometry and content delegation", function()
               self.closed = true
               closed[#closed + 1] = self
             end
-            function win:hide()
-              self.hidden = true
-            end
-            function win:show()
-              self.hidden = false
-            end
-            function win:is_open()
-              return not self.closed
-            end
-            function win:is_visible()
-              return not self.closed and not self.hidden
-            end
             windows[#windows + 1] = win
             return win
           end,
@@ -528,7 +515,7 @@ test("panel frame colors corners geometry and content delegation", function()
           eq(spans[1][2].fg, active and "#bb9af7" or "#123456")
           eq(spans[1][2].bg, nil)
           local text = spans[1][1]
-          eq(Utils.sanitize_utf8(text), text)
+          eq(Text.sanitize_utf8(text), text)
           assert(not text:find(">", 1, true))
           if width >= 2 then
             local left = row == 1 and "┌" or row == height and "└" or "│"
@@ -546,18 +533,261 @@ test("panel frame colors corners geometry and content delegation", function()
       panel:set_cursor(17)
       eq(content.cursor, 17)
       eq(frame.cursor, nil)
-      assert(panel:is_open() and panel:is_visible())
-      panel:hide()
-      assert(frame.hidden and content.hidden and not panel:is_visible())
-      panel:show()
-      assert(not frame.hidden and not content.hidden and panel:is_visible())
       panel:close()
       eq(closed[1], content)
       eq(closed[2], frame)
-      assert(not panel:is_open() and not panel:is_visible())
+      panel:close()
+      eq(#closed, 2)
     end
   end
 end)
+
+test("comment index derives identities indices predicates and all ancestors", function()
+  local store = {}
+  eq(Comments.version(store), 0)
+  local a = { target = { kind = "line", path = "src/api/a" } }
+  local b = { target = { kind = "dir", path = "src/api" }, commit = "x" }
+  Comments.add(store, a)
+  Comments.add(store, b)
+  Comments.add(store, { file = "src/api-other/b" })
+  local index = Comments.index(store)
+  eq(index.by_path["src/api/a"][1].record, a)
+  eq(index.by_path["src/api/a"][1].index, 1)
+  eq(index.exact["src/api/a"], 1)
+  eq(index.under["src/api"], 2)
+  eq(index.under.src, 3)
+  eq(index.under["src/api-other"], 1)
+  local filtered = Comments.index(store, function(record)
+    return record.commit == "x"
+  end)
+  eq(filtered.by_path["src/api"][1].index, 2)
+  eq(filtered.under.src, 1)
+  eq(filtered.exact["src/api/a"], nil)
+  eq(Comments.update(store, 8, a), nil)
+  eq(Comments.remove(store, 8), nil)
+  eq(Comments.version(store), 3)
+  Comments.update(store, 1, b)
+  Comments.remove(store, 2)
+  eq(Comments.version(store), 5)
+  eq(Comments.index(store).by_path["src/api"][1].index, 1)
+  eq(index.by_path["src/api/a"][1].record, a)
+end)
+
+local function panel_mock()
+  local f = { windows = {}, renders = 0 }
+  maki = {
+    ui = {
+      buf = function()
+        return {
+          set_lines = function()
+            f.renders = f.renders + 1
+          end,
+        }
+      end,
+      open_win = function(_, opts)
+        if #f.windows == 1 and f.create_failure then
+          error("create failed")
+        end
+        local win = { width = opts.width, height = opts.height, closes = 0 }
+        function win:close()
+          self.closes = self.closes + 1
+          if self.failure then
+            error("close failed")
+          end
+        end
+        f.windows[#f.windows + 1] = win
+        return win
+      end,
+    },
+  }
+  return f
+end
+
+test("panel config compares content and snapshots mutable footer", function()
+  local f = panel_mock()
+  local footer = { { "q", "quit" } }
+  local panel = Layout.open_panel({}, { width = 40, height = 8, footer = footer })
+  eq(f.renders, 1)
+  panel:set_config({ title = "", active = false, footer = { { "q", "quit" } } })
+  eq(f.renders, 1)
+  footer[1][2] = "close"
+  panel:set_config({ footer = footer })
+  eq(f.renders, 2)
+  footer[1][2] = "exit"
+  panel:set_config({ footer = footer })
+  eq(f.renders, 3)
+  panel:set_config({ title = "changed" })
+  panel:set_config({ active = true })
+  eq(f.renders, 5)
+end)
+
+test("panel close retries failed windows without repeating successful closes", function()
+  for _, failed_window in ipairs({ 1, 2 }) do
+    local f = panel_mock()
+    local panel = Layout.open_panel({}, { width = 40, height = 8 })
+    f.windows[failed_window].failure = true
+    eq(
+      pcall(function()
+        panel:close()
+      end),
+      false
+    )
+    eq(f.windows[1].closes, 1)
+    eq(f.windows[2].closes, 1)
+    f.windows[failed_window].failure = false
+    panel:close()
+    eq(f.windows[failed_window].closes, 2)
+    eq(f.windows[3 - failed_window].closes, 1)
+    panel:close()
+    eq(f.windows[failed_window].closes, 2)
+    eq(f.windows[3 - failed_window].closes, 1)
+  end
+end)
+
+test("partial panel creation closes frame even when cleanup throws", function()
+  local f = panel_mock()
+  f.create_failure = true
+  local open = maki.ui.open_win
+  maki.ui.open_win = function(...)
+    local win = open(...)
+    win.failure = true
+    return win
+  end
+  local ok, err = pcall(Layout.open_panel, {}, { width = 40, height = 8 })
+  eq(ok, false)
+  assert(tostring(err):find("create failed", 1, true))
+  eq(f.windows[1].closes, 1)
+end)
+
+local function input_mock()
+  local f = { reads = 0, sleeps = 0, edits = 0, restored = 0, closed = {} }
+  local state = {}
+  for _, name in ipairs({ "one", "two" }) do
+    state[name] = {
+      close = function()
+        f.closed[#f.closed + 1] = name
+        if f.close_failure == name then
+          error("close failed")
+        end
+      end,
+    }
+  end
+  maki = {
+    ui = {
+      input = function()
+        f.reads = f.reads + 1
+        if f.read_failure then
+          return nil, "read failed"
+        end
+        return { text = "é draft", version = f.reads, session_id = f.switched and "other" or "origin" }
+      end,
+      input_edit = function(opts)
+        f.edits = f.edits + 1
+        f.edit = opts
+        if f.edit_failure then
+          return nil, f.edit_failure
+        end
+        if f.edits <= (f.hidden or 0) then
+          return nil, "the chat input is not on screen, so it cannot be edited"
+        end
+        return true
+      end,
+      flash = function(message)
+        f.message = message
+      end,
+    },
+    async = {
+      sleep = function(ms)
+        eq(ms, 16)
+        eq(state.one, nil)
+        eq(state.two, nil)
+        f.sleeps = f.sleeps + 1
+        if f.switch then
+          f.switched = true
+        end
+      end,
+    },
+  }
+  f.state = state
+  function f:fill()
+    return Input.fill_input(state, { "one", "two" }, "prompt", function()
+      f.restored = f.restored + 1
+    end)
+  end
+  return f
+end
+
+test("input append preserves session snapshot byte offsets and bounded waits", function()
+  local f = input_mock()
+  f.hidden = 2
+  eq(f:fill(), true)
+  eq(f.sleeps, 3)
+  eq(f.edits, 3)
+  eq(f.edit.start, #"é draft")
+  eq(f.edit.stop, #"é draft")
+  eq(f.edit.version, 4)
+  eq(f.edit.session_id, "origin")
+  eq(f.edit.text, "\n\nprompt")
+  eq(f.restored, 0)
+  f = input_mock()
+  f.hidden = 10
+  eq(f:fill(), false)
+  eq(f.edits, 5)
+  eq(f.sleeps, 5)
+  eq(f.restored, 1)
+end)
+
+test("input close exceptions retain failed windows for restoration and retry", function()
+  for _, name in ipairs({ "one", "two" }) do
+    local f = input_mock()
+    local failed_window = f.state[name]
+    local other = name == "one" and "two" or "one"
+    f.close_failure = name
+    local restore_saw_failed = false
+    eq(
+      Input.fill_input(f.state, { "one", "two" }, "prompt", function()
+        f.restored = f.restored + 1
+        restore_saw_failed = f.state[name] == failed_window and f.state[other] == nil
+      end),
+      false
+    )
+    eq(#f.closed, 2)
+    eq(f.closed[1], "one")
+    eq(f.closed[2], "two")
+    eq(f.state[name], failed_window)
+    eq(f.state[other], nil)
+    eq(restore_saw_failed, true)
+    eq(f.restored, 1)
+    eq(f.edits, 0)
+    f.close_failure = nil
+    eq(f:fill(), true)
+    eq(#f.closed, 3)
+    eq(f.closed[3], name)
+    eq(f.state.one, nil)
+    eq(f.state.two, nil)
+    eq(f.restored, 1)
+  end
+end)
+
+test("input cancels session switch restores rejected edits and keeps early failure UI", function()
+  local f = input_mock()
+  f.switch = true
+  eq(f:fill(), false)
+  eq(f.edits, 0)
+  eq(f.restored, 1)
+  f = input_mock()
+  f.edit_failure = "version changed"
+  eq(f:fill(), false)
+  eq(f.edits, 1)
+  eq(f.restored, 1)
+  f = input_mock()
+  f.read_failure = true
+  eq(f:fill(), false)
+  eq(#f.closed, 0)
+  eq(f.restored, 0)
+end)
+
+require("tests.common_text")(test, eq)
 
 print(string.format("common: %d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

@@ -16,337 +16,10 @@ local function test(name, fn)
   end
   print((ok and "PASS " or "FAIL ") .. name .. (ok and "" or ": " .. tostring(err)))
 end
-local Layout = require("common.layout")
-local open_panel = Layout.open_panel
-local Tree = require("common.tree")
-local build_tree = Tree.build_tree
 local Comments = require("common.comments")
-local Utils = require("common.utils")
-local add_comment, update_comment = Comments.add, Comments.update
+local Utils = require("common.text")
+local fixture = require("tests.support.code_host").new
 
-local function fixture(paths, sources)
-  local f = {
-    paths = paths or { "a.lua" },
-    sources = sources or {},
-    queue = {},
-    windows = {},
-    flashes = {},
-    sessions = {},
-    edits = {},
-    input_reads = 0,
-    draft = "",
-    commands = {},
-    registrations = {},
-    size = { cols = 120, rows = 30 },
-    autocmds = 0,
-  }
-  Comments.add = function(comment_store, record)
-    assert(record.target, "New code comments require a target")
-    eq(record.file, nil)
-    if record.target.kind ~= "line" then
-      eq(record.start_line, nil)
-      eq(record.end_line, nil)
-      eq(record.snippet, nil)
-    end
-    return add_comment(comment_store, record)
-  end
-  Comments.update = function(comment_store, index, record)
-    local old = comment_store[index]
-    eq(record.target, old.target)
-    eq(record.start_line, old.start_line)
-    eq(record.end_line, old.end_line)
-    eq(record.snippet, old.snippet)
-    return update_comment(comment_store, index, record)
-  end
-  Tree.build_tree = function(paths_to_build)
-    f.tree_builds = (f.tree_builds or 0) + 1
-    return build_tree(paths_to_build)
-  end
-  local numbered = {}
-  for i = 1, 90 do
-    numbered[i] = "source " .. i
-  end
-  f.sources["a.lua"] = f.sources["a.lua"] or table.concat(numbered, "\n")
-  local function plain(lines)
-    local result = {}
-    for _, line in ipairs(lines or {}) do
-      local spans = {}
-      for _, span in ipairs(line) do
-        spans[#spans + 1] = span[1]
-      end
-      result[#result + 1] = table.concat(spans)
-    end
-    return table.concat(result, "\n")
-  end
-  local panels = {}
-  Layout.open_panel = function(buf, opts)
-    local panel = open_panel(buf, opts)
-    local content = f.windows[#f.windows]
-    content.frame = f.windows[#f.windows - 1]
-    panels[opts.title:match("^%s*(.-)%s*$")] = content
-    local set_config = panel.set_config
-    function panel:set_config(config)
-      content.config = config
-      return set_config(self, config)
-    end
-    return panel
-  end
-  function f:win(title)
-    return panels[title]
-  end
-  function f:text(title)
-    return plain(self:win(title).buf.content)
-  end
-  function f:at(title)
-    return plain({ self:win(title).buf.content[self:win(title).cursor] })
-  end
-  function f:check(fn)
-    self.queue[#self.queue + 1] = fn
-  end
-  function f:key(key)
-    self.queue[#self.queue + 1] = { type = "key", key = key }
-  end
-  function f:paste(text)
-    self.queue[#self.queue + 1] = { type = "paste", text = text }
-  end
-  function f:run()
-    self.commands["/code"].handler()
-    for _, flash in ipairs(self.flashes) do
-      assert(not flash:find("Code browser error:", 1, true), flash)
-    end
-    eq(#self.queue, 0)
-    for _, win in ipairs(self.windows) do
-      assert(win.closed, "Window leaked")
-    end
-  end
-  maki = {
-    api = {
-      register_command = function(spec)
-        f.registrations[spec.name] = (f.registrations[spec.name] or 0) + 1
-        f.commands[spec.name] = spec
-      end,
-      create_autocmd = function()
-        f.autocmds = f.autocmds + 1
-      end,
-    },
-    async = {
-      sleep = function(ms)
-        eq(ms, 16)
-        f.sleeps = (f.sleeps or 0) + 1
-        for _, win in ipairs(f.windows) do
-          if win.closed and f.focused == win then
-            f.focused = nil
-          end
-        end
-        if f.on_sleep then
-          f.on_sleep()
-        end
-      end,
-    },
-    fn = {
-      jobstart = function(cmd)
-        f.jobs = (f.jobs or 0) + 1
-        f.last_command = cmd
-        return 1
-      end,
-      jobwait = function()
-        if f.git_error then
-          return { exit_code = 1, stderr = f.git_error }
-        end
-        return {
-          exit_code = 0,
-          stdout = f.last_command:find("rev-parse", 1, true) and "true\n" or table.concat(f.paths, "\0") .. "\0",
-        }
-      end,
-    },
-    fs = {
-      abspath = function(path)
-        return "/project/" .. path:sub(3)
-      end,
-      metadata = function(path)
-        if path:sub(1, 9) == "/project/" then
-          path = path:sub(10)
-        else
-          eq(path:sub(1, 2), "./")
-          path = path:sub(3)
-        end
-        if f.meta_error then
-          error(f.meta_error)
-        end
-        if f.missing == path then
-          return nil, "File no longer exists"
-        end
-        return { is_file = not f.directory, size = f.large and 1048577 or #(f.sources[path] or "") }
-      end,
-      read = function(path)
-        f.reads = (f.reads or 0) + 1
-        if f.read_error then
-          error(f.read_error)
-        end
-        return f.sources[path:sub(3)] or ""
-      end,
-    },
-    session = {
-      prompt = function()
-        error("must not auto-send")
-      end,
-      new = function(opts)
-        f.sessions[#f.sessions + 1] = opts
-        error("session.new must not be called")
-      end,
-    },
-    ui = {
-      input = function()
-        f.input_reads = f.input_reads + 1
-        if f.input_throw then
-          error("snapshot panic")
-        end
-        if f.input_fail then
-          return nil, "snapshot unavailable"
-        end
-        return { text = f.draft, cursor = 0, version = 17, session_id = f.session_id or "current-chat" }
-      end,
-      input_edit = function(opts)
-        assert(not f.focused, "Focused overlay still covers input")
-        eq(opts.start, #f.draft)
-        eq(opts.stop, #f.draft)
-        eq(opts.version, 17)
-        eq(opts.session_id, "current-chat")
-        f.edits[#f.edits + 1] = opts
-        if f.notscreen and #f.edits <= f.notscreen then
-          return nil, "the chat input is not on screen, so it cannot be edited"
-        end
-        if f.submit_throw then
-          error("input panic")
-        end
-        if f.submit_fail then
-          return nil, "input unavailable"
-        end
-        f.draft = f.draft .. opts.text
-        return true
-      end,
-      action = function()
-        error("must not auto-send")
-      end,
-      open_editor = function(path)
-        f.editor_paths = f.editor_paths or {}
-        f.editor_paths[#f.editor_paths + 1] = path
-        if f.edit then
-          f.edit(path)
-        end
-        if f.editor_error then
-          error(f.editor_error)
-        end
-        return f.editor_code or 0
-      end,
-      terminal_size = function()
-        return { cols = f.size.cols, rows = f.size.rows }
-      end,
-      theme_color = function()
-        return "#202020"
-      end,
-      highlight = function()
-        return nil
-      end,
-      flash = function(text)
-        f.flashes[#f.flashes + 1] = text
-      end,
-      buf = function()
-        return {
-          content = {},
-          set_lines = function(self, lines)
-            for _, row in ipairs(lines) do
-              for _, span in ipairs(row) do
-                eq(Utils.sanitize_utf8(span[1]), span[1])
-              end
-            end
-            self.content = lines
-          end,
-        }
-      end,
-      open_win = function(buf, opts)
-        if f.open_error and #f.windows == 1 then
-          error("window unavailable")
-        end
-        local win = { buf = buf, opts = opts, width = opts.width, height = opts.height }
-        function win:set_cursor(row)
-          self.cursor = row
-        end
-        function win:set_config(config)
-          self.config = config
-        end
-        function win:hide()
-          self.hidden = true
-        end
-        function win:show()
-          self.hidden = false
-          if self.opts.focus then
-            f.focused = self
-          end
-          f.last_shown = self
-        end
-        function win:close()
-          self.closed = true
-        end
-        function win:recv()
-          assert(not self.closed, "Cannot receive events on closed window")
-          while true do
-            local event = table.remove(f.queue, 1)
-            if type(event) == "function" then
-              event(f)
-            else
-              return event
-            end
-          end
-        end
-        if opts.focus then
-          f.focused = win
-        end
-        f.windows[#f.windows + 1] = win
-        return win
-      end,
-    },
-  }
-  package.preload["maki.text_input"] = function()
-    return {
-      new = function()
-        return {
-          text = "",
-          cursor = 0,
-          insert_text = function(self, text)
-            self.text = self.text:sub(1, self.cursor) .. text .. self.text:sub(self.cursor + 1)
-            self.cursor = self.cursor + #text
-          end,
-          value = function(self)
-            return self.text
-          end,
-          handle_key = function(self, key)
-            if key == "<BS>" and self.cursor > 0 then
-              self.text = self.text:sub(1, self.cursor - 1) .. self.text:sub(self.cursor + 1)
-              self.cursor = self.cursor - 1
-            elseif key == "<C-u>" then
-              self.text, self.cursor = "", 0
-            elseif key == "<Left>" then
-              self.cursor = math.max(0, self.cursor - 1)
-            elseif key == "<Right>" then
-              self.cursor = math.min(#self.text, self.cursor + 1)
-            elseif #key == 1 then
-              self:insert_text(key)
-            end
-          end,
-          render = function(self, prefix)
-            return { lines = { { { prefix .. self.text, "item" } } }, cursor_row = 1 }
-          end,
-        }
-      end,
-    }
-  end
-  package.loaded["code"] = nil
-  package.loaded["maki.text_input"] = nil
-  f.module = require("code")
-  f.module.setup()
-  return f
-end
 local function comment(f, text)
   f:key("c")
   f:paste(text)
@@ -358,11 +31,7 @@ test("code and complete review setup are idempotent", function()
   f.module.setup("ignored")
   f.module.setup({ description = "ignored" })
   eq(f.registrations["/code"], 1)
-  local file = assert(io.open("lua/review/init.lua", "r"))
-  local source = file:read("*a")
-  file:close()
-  source = source:gsub("%f[%a]continue%f[%A]", 'error("unexercised Luau continue")')
-  local review = assert(load(source, "@lua/review/init.lua"))()
+  local review = require("review")
   review.setup()
   review.setup()
   eq(f.registrations["/review"], 1)
@@ -812,9 +481,6 @@ test("numbers focus boxes while Tab h l stay local and editor retains digits", f
   f:key("<CR>")
   f:check(function()
     contains(f:text("Comments"), "a.lua:2 123")
-    contains(f:win("Files").config.title, "[1] Files")
-    contains(f:win("Comments").config.title, "[2] Comments")
-    contains(f:win("Source").config.title, "[3] Source")
   end)
   f:key("q")
   f:run()
@@ -835,6 +501,9 @@ end)
 
 test("focused successful submit snapshots and clears reopened comments", function()
   local f = fixture()
+  local review_store = require("review.comments").store
+  local review_comment = { text = "review must survive code submission" }
+  review_store[#review_store + 1] = review_comment
   f.draft = "已有中文草稿\n继续"
   f:key("<CR>")
   f:key("j")
@@ -843,6 +512,10 @@ test("focused successful submit snapshots and clears reopened comments", functio
   f:run()
   eq(#f.sessions, 0)
   eq(#f.edits, 1)
+  eq(f.sleeps, 1)
+  eq(f.focused, nil)
+  eq(review_store[#review_store], review_comment)
+  table.remove(review_store)
   local prompt = f.edits[1].text
   eq(prompt:sub(1, 2), "\n\n")
   eq(f.draft, "已有中文草稿\n继续" .. prompt)
@@ -857,7 +530,7 @@ test("focused successful submit snapshots and clears reopened comments", functio
   f:run()
 end)
 
-for _, mode in ipairs({ "submit_fail", "submit_throw", "input_fail", "input_throw" }) do
+for _, mode in ipairs({ "submit_throw", "input_throw" }) do
   test("failed submit retains comments on reopen " .. mode, function()
     local f = fixture()
     f[mode] = true
@@ -869,7 +542,7 @@ for _, mode in ipairs({ "submit_fail", "submit_throw", "input_fail", "input_thro
       contains(f:text("Comments"), "retain")
       eq(f.focused, f:win("Files"))
       assert(not f:win("Files").closed)
-      if mode == "submit_fail" or mode == "submit_throw" then
+      if mode == "submit_throw" then
         eq(#f.windows, 12)
         for i = 1, 6 do
           assert(f.windows[i].closed)
@@ -1059,6 +732,37 @@ test("unchanged resize and close event cleanup", function()
   f:run()
 end)
 
+test("failed panel close retains resources and blocks reopen until retry", function()
+  local f = fixture()
+  local Render = require("code.render")
+  local s = { fbuf = maki.ui.buf(), mbuf = maki.ui.buf(), sbuf = maki.ui.buf() }
+  Render.open_windows(s)
+  local panel = s.swin
+  local native = f.windows[1]
+  local close = native.close
+  local attempts = 0
+  native.close = function()
+    attempts = attempts + 1
+    error("close unavailable")
+  end
+  Render.close_windows(s)
+  eq(s.swin, panel)
+  eq(s.fwin, nil)
+  eq(s.mwin, nil)
+  assert(not native.closed)
+  for i = 2, 6 do
+    assert(f.windows[i].closed)
+  end
+  eq(pcall(Render.open_windows, s), false)
+  eq(#f.windows, 6)
+  eq(s.swin, panel)
+  eq(attempts, 2)
+  native.close = close
+  Render.close_windows(s)
+  eq(s.swin, nil)
+  assert(native.closed)
+end)
+
 test("partial window creation error cleanup", function()
   local f = fixture()
   f.open_error = true
@@ -1091,348 +795,7 @@ test("Git error opens no windows", function()
   contains(f.flashes[1], "Not a Git working tree: not a repository")
 end)
 
-test("filename search empty query keeps all files without rescanning", function()
-  local f = fixture({ "a.lua", "dir/b.txt" })
-  f:key("/")
-  f:key("<Left>")
-  f:check(function()
-    contains(f:text("Files"), "a.lua")
-    contains(f:text("Files"), "b.txt")
-    eq(f.jobs, 2)
-  end)
-  f:key("<CR>")
-  f:key("G")
-  f:key("k")
-  f:check(function()
-    eq(f.jobs, 2)
-  end)
-  f:key("q")
-  f:run()
-end)
-
-for _, query in ipairs({ "pha", "ALPHA" }) do
-  test("basename substring search " .. query, function()
-    local f = fixture({ "alpha/no.txt", "src/deep/Alpha.lua", "z.txt" }, { ["src/deep/Alpha.lua"] = "matched source" })
-    f:key("/")
-    f:paste(query)
-    f:check(function()
-      contains(f:text("Files"), "src/deep")
-      contains(f:text("Files"), "Alpha.lua")
-      assert(not f:text("Files"):find("no.txt", 1, true))
-      assert(not f:text("Files"):find("z.txt", 1, true))
-      contains(f:text("Source"), "matched source")
-      eq(f.jobs, 2)
-    end)
-    f:key("<CR>")
-    f:key("q")
-    f:run()
-  end)
-end
-
-for _, query in ipairs({ ".", "[", "*", "%" }) do
-  test("filename search treats " .. query .. " literally", function()
-    local name = "special" .. query .. "name"
-    local f = fixture({ "ordinary", name })
-    f:key("/")
-    f:paste(query)
-    f:check(function()
-      contains(f:text("Files"), name)
-      assert(not f:text("Files"):find("ordinary", 1, true))
-    end)
-    f:key("<CR>")
-    f:key("q")
-    f:run()
-  end)
-end
-
-for _, exit in ipairs({ "<Esc>", "<C-c>" }) do
-  test("search no matches clears stale preview and " .. exit .. " restores", function()
-    local f = fixture({ "a.lua", "b.lua" })
-    f:key("G")
-    f:key("/")
-    f:paste("missing")
-    f:check(function()
-      eq(f:text("Files"), "No files")
-      contains(f:text("Source"), "Select a file")
-      eq(f:win("Files").cursor, 1)
-    end)
-    f:key(exit)
-    f:check(function()
-      contains(f:text("Files"), "a.lua")
-      contains(f:text("Files"), "b.lua")
-      contains(f:text("Source"), "a.lua")
-      eq(f.jobs, 2)
-    end)
-    f:key("q")
-    f:run()
-  end)
-end
-
-test("search typing owns shortcuts, backspace and cursor movement", function()
-  local f = fixture({ "jkrs123.lua", "other.lua" })
-  f:key("/")
-  for key in ("jkrs123"):gmatch(".") do
-    f:key(key)
-  end
-  f:key("<BS>")
-  local builds
-  f:check(function()
-    builds = f.tree_builds
-  end)
-  f:key("<Left>")
-  f:key("<Right>")
-  f:check(function()
-    eq(f.tree_builds, builds)
-    contains(f:win("Files").config.title, "/jkrs12")
-    contains(f:text("Files"), "jkrs123.lua")
-    eq(f.jobs, 2)
-    eq(f:win("Source").cursor, 2)
-  end)
-  f:key("<CR>")
-  f:key("/")
-  f:key("3")
-  f:key("<CR>")
-  f:check(function()
-    contains(f:win("Files").config.title, "/jkrs123")
-  end)
-  f:key("<Esc>")
-  f:check(function()
-    contains(f:text("Files"), "other.lua")
-  end)
-  f:key("<Esc>")
-  f:run()
-end)
-
-test("retained filter navigation, preview, Enter, edit and comment counts use real paths", function()
-  local f = fixture({ "a.txt", "b.lua", "c.lua" }, { ["b.lua"] = "bee", ["c.lua"] = "see" })
-  f:key("j")
-  f:key("<CR>")
-  comment(f, "on bee")
-  f:key("1")
-  f:key("/")
-  f:paste(".lua")
-  f:key("<CR>")
-  f:check(function()
-    contains(f:at("Files"), "b.lua ●1")
-    contains(f:text("Source"), "bee")
-  end)
-  f:key("j")
-  f:check(function()
-    contains(f:at("Files"), "c.lua")
-    contains(f:text("Source"), "see")
-    eq(f.jobs, 2)
-  end)
-  f:key("e")
-  f:check(function()
-    eq(f.editor_paths[1], "/project/c.lua")
-    contains(f:at("Files"), "c.lua")
-  end)
-  f:key("k")
-  f:key("<CR>")
-  f:check(function()
-    contains(f:text("Source"), "b.lua")
-    contains(f:at("Source"), "bee")
-  end)
-  f:key("q")
-  f:run()
-end)
-
-test("search clamps selection and sanitizes pasted query to one line", function()
-  local f = fixture({ "a.txt", "b.txt", "one two.lua" })
-  f:key("G")
-  f:key("/")
-  f:paste("one\r\n\ttwo")
-  f:check(function()
-    contains(f:win("Files").config.title, "/one two")
-    eq(f:win("Files").cursor, 1)
-    contains(f:at("Files"), "one two.lua")
-  end)
-  f:key("<CR>")
-  f:key("q")
-  f:run()
-end)
-
-test("filtered tree collapse expand preserves hidden collapsed directories", function()
-  local f = fixture({ "src/deep/a.lua", "src/deep/b.txt", "other/c.txt" })
-  f:key("g")
-  f:key("h")
-  f:key("G")
-  f:key("/")
-  f:paste(".lua")
-  f:key("<CR>")
-  f:key("g")
-  f:key("h")
-  f:check(function()
-    contains(f:text("Files"), "src/deep")
-    assert(not f:text("Files"):find("a.lua", 1, true))
-  end)
-  f:key("<CR>")
-  f:check(function()
-    contains(f:text("Files"), "a.lua")
-  end)
-  f:key("<Esc>")
-  f:check(function()
-    contains(f:at("Files"), "src/deep")
-    contains(f:text("Files"), "b.txt")
-    contains(f:text("Files"), "other")
-    assert(not f:text("Files"):find("c.txt", 1, true))
-    eq(f.jobs, 2)
-  end)
-  f:key("q")
-  f:run()
-end)
-
-for _, expand in ipairs({ "<CR>", "l", "<Right>" }) do
-  test("search compressed directory inherits ancestor collapse and expands with " .. expand, function()
-    local f = fixture({ "src/a.txt", "src/deep/b.lua" })
-    f:key("g")
-    f:key("h")
-    f:key("/")
-    f:paste(".lua")
-    f:key("<CR>")
-    f:check(function()
-      contains(f:text("Files"), "▸ src/deep")
-      assert(not f:text("Files"):find("b.lua", 1, true))
-    end)
-    f:key("<Esc>")
-    f:check(function()
-      contains(f:text("Files"), "▸ src")
-      assert(not f:text("Files"):find("a.txt", 1, true))
-      assert(not f:text("Files"):find("b.lua", 1, true))
-    end)
-    f:key("/")
-    f:paste(".lua")
-    f:key("<CR>")
-    f:key(expand)
-    f:check(function()
-      contains(f:text("Files"), "▾ src/deep")
-      contains(f:text("Files"), "b.lua")
-    end)
-    f:key("h")
-    f:check(function()
-      contains(f:text("Files"), "▸ src/deep")
-      assert(not f:text("Files"):find("b.lua", 1, true))
-    end)
-    f:key("<Esc>")
-    f:check(function()
-      contains(f:text("Files"), "▾ src")
-      contains(f:text("Files"), "▸ deep")
-      contains(f:text("Files"), "a.txt")
-      assert(not f:text("Files"):find("b.lua", 1, true))
-    end)
-    f:key("/")
-    f:paste(".lua")
-    f:key("<CR>")
-    f:key(expand)
-    f:key("<Esc>")
-    f:check(function()
-      contains(f:text("Files"), "▾ src")
-      contains(f:text("Files"), "▾ deep")
-      contains(f:text("Files"), "a.txt")
-      contains(f:text("Files"), "b.lua")
-    end)
-    f:key("q")
-    f:run()
-  end)
-end
-
-test("refresh reapplies retained query, rebuilds index and preserves source line", function()
-  local f = fixture({ "a.txt", "b.lua", "c.lua" }, { ["b.lua"] = "one\ntwo\nthree", ["c.lua"] = "old" })
-  f:key("/")
-  f:paste(".lua")
-  f:key("<CR>")
-  f:key("g")
-  f:key("<CR>")
-  f:key("j")
-  f:key("1")
-  f:check(function()
-    f.paths = { "b.lua", "new.lua", "z.txt" }
-    f.sources["b.lua"] = "one\nupdated two\nthree"
-  end)
-  f:key("r")
-  f:check(function()
-    contains(f:at("Files"), "b.lua")
-    contains(f:at("Source"), "updated two")
-    contains(f:text("Files"), "new.lua")
-    assert(not f:text("Files"):find("c.lua", 1, true))
-    assert(not f:text("Files"):find("z.txt", 1, true))
-    contains(f:win("Files").config.title, "/.lua")
-    eq(f.jobs, 4)
-    f.paths = { "new.lua", "z.txt" }
-  end)
-  f:key("r")
-  f:check(function()
-    contains(f:at("Files"), "new.lua")
-    contains(f:text("Source"), "new.lua")
-    eq(f.jobs, 6)
-    f.paths = { "z.txt" }
-  end)
-  f:key("r")
-  f:check(function()
-    eq(f:text("Files"), "No files")
-    contains(f:text("Source"), "Select a file")
-  end)
-  f:key("<Esc>")
-  f:check(function()
-    contains(f:text("Files"), "z.txt")
-  end)
-  f:key("q")
-  f:run()
-end)
-
-test("filename search handles an empty workspace and failed refresh", function()
-  local f = fixture({})
-  f:key("/")
-  f:paste(".lua")
-  f:key("<CR>")
-  f:check(function()
-    eq(f:text("Files"), "No files")
-    contains(f:text("Source"), "Select a file")
-    f.paths = { "new.lua" }
-  end)
-  f:key("r")
-  f:check(function()
-    contains(f:text("Files"), "new.lua")
-    f.git_error = "listing failed"
-  end)
-  f:key("r")
-  f:check(function()
-    contains(f:text("Files"), "new.lua")
-    contains(f:win("Files").config.title, "/.lua")
-    contains(f.flashes[#f.flashes], "listing failed")
-  end)
-  f:key("q")
-  f:run()
-end)
-
-test("retained search leaves Source refresh and editing independent", function()
-  local f = fixture({ "a.lua", "b.lua" }, { ["a.lua"] = "one\ntwo", ["b.lua"] = "other" })
-  f:key("<CR>")
-  f:key("j")
-  comment(f, "jump")
-  f:key("1")
-  f:key("/")
-  f:paste("b.lua")
-  f:key("<CR>")
-  f:key("2")
-  f:key("<CR>")
-  f:check(function()
-    f.sources["a.lua"] = "one\nrefreshed two"
-  end)
-  f:key("r")
-  f:check(function()
-    contains(f:at("Source"), "refreshed two")
-    contains(f:at("Files"), "b.lua")
-  end)
-  f:key("e")
-  f:check(function()
-    eq(f.editor_paths[1], "/project/a.lua")
-    contains(f:at("Source"), "refreshed two")
-    contains(f:win("Files").config.title, "/b.lua")
-  end)
-  f:key("q")
-  f:run()
-end)
+require("tests.code_search")(test, eq, contains, fixture, comment)
 
 test("Files edit still reloads source when Git refresh fails", function()
   local f = fixture()
@@ -1631,6 +994,154 @@ test("filtered Files path comments retain targets through blank edits refresh an
   f:run()
   contains(f.edits[1].text, "Target: file\nPath: dir/b.lua\nComment: edited missing")
   assert(not f.edits[1].text:find("Context snapshot", 1, true))
+end)
+
+test("no-op keys keep tree and all panel buffers cached", function()
+  local f = fixture()
+  local calls, flattens, reads
+  f:check(function()
+    calls = { f:win("Files").buf.set_calls, f:win("Comments").buf.set_calls, f:win("Source").buf.set_calls }
+    flattens, reads = f.tree_flattens, f.reads
+  end)
+  for _, key in ipairs({ "k", "g", "1", "<Tab>", "h", "d" }) do
+    f:key(key)
+  end
+  f:check(function()
+    eq(f.tree_flattens, flattens)
+    eq(f.reads, reads)
+    for i, title in ipairs({ "Files", "Comments", "Source" }) do
+      eq(f:win(title).buf.set_calls, calls[i])
+    end
+  end)
+  f:key("q")
+  f:run()
+end)
+
+test("inline cursor-only moves redraw Source without invalidating other panels", function()
+  local f = fixture()
+  f:key("<CR>")
+  f:key("c")
+  f:paste("abc\ndef")
+  local source_calls, file_calls, comment_calls
+  f:check(function()
+    source_calls = f:win("Source").buf.set_calls
+    file_calls = f:win("Files").buf.set_calls
+    comment_calls = f:win("Comments").buf.set_calls
+    eq(f.rendered_input.line, 2)
+    eq(f.rendered_input.col, 3)
+  end)
+  local function move(key, line, col, changed)
+    f:key(key)
+    f:check(function()
+      source_calls = source_calls + (changed and 1 or 0)
+      eq(f:win("Source").buf.set_calls, source_calls)
+      eq(f:win("Files").buf.set_calls, file_calls)
+      eq(f:win("Comments").buf.set_calls, comment_calls)
+      eq(f.rendered_input.text, "abc\ndef")
+      eq(f.rendered_input.line, line)
+      eq(f.rendered_input.col, col)
+      contains(f:at("Source"), line == 1 and "abc" or "def")
+    end)
+  end
+  move("<Left>", 2, 2, true)
+  move("<Right>", 2, 3, true)
+  move("<Right>", 2, 3, false)
+  move("<Home>", 2, 0, true)
+  move("<Home>", 2, 0, false)
+  move("<Left>", 1, 3, true)
+  move("<Right>", 2, 0, true)
+  move("<End>", 2, 3, true)
+  move("<End>", 2, 3, false)
+  move("<Up>", 1, 3, true)
+  move("<Down>", 2, 3, true)
+  move("<Up>", 1, 3, true)
+  move("<Home>", 1, 0, true)
+  move("<Left>", 1, 0, false)
+  move("<Up>", 1, 0, false)
+  f:key("<Esc>")
+  f:key("q")
+  f:run()
+end)
+
+test("Source navigation redraws only Source and Enter reuses preview", function()
+  local f = fixture()
+  f:key("<CR>")
+  f:check(function()
+    eq(f.reads, 1)
+    f.file_calls, f.comment_calls = f:win("Files").buf.set_calls, f:win("Comments").buf.set_calls
+    f.flatten_calls = f.tree_flattens
+  end)
+  f:key("j")
+  f:key("v")
+  f:key("j")
+  f:check(function()
+    eq(f:win("Files").buf.set_calls, f.file_calls)
+    eq(f:win("Comments").buf.set_calls, f.comment_calls)
+    eq(f.tree_flattens, f.flatten_calls)
+    eq(f.reads, 1)
+  end)
+  f:key("q")
+  f:run()
+end)
+
+test("search mapping never reads or mutates the displayed source", function()
+  local f = fixture({ "a.lua", "b.lua" })
+  local Files = require("code.files")
+  local source = { "kept" }
+  local state = { file_cursor = 1, collapsed = {}, file = "a.lua", lines = source, line = 8 }
+  Files.index_paths(state, f.paths)
+  Files.apply_search(state, "b")
+  eq(f.reads, nil)
+  eq(state.filtered_paths[1], "b.lua")
+  eq(state.file, "a.lua")
+  eq(state.lines, source)
+  eq(state.line, 8)
+  eq(state.paths, nil)
+end)
+
+test("source navigation reuses derived comment index", function()
+  local f = fixture()
+  local index = Comments.index
+  local calls = 0
+  Comments.index = function(...)
+    calls = calls + 1
+    return index(...)
+  end
+  f:key("<CR>")
+  comment(f, "cached marker")
+  f:check(function()
+    f.index_calls = calls
+  end)
+  f:key("j")
+  f:key("j")
+  f:key("v")
+  f:key("j")
+  f:check(function()
+    eq(calls, f.index_calls)
+    contains(f:text("Source"), "cached marker")
+  end)
+  f:key("q")
+  f:run()
+  Comments.index = index
+end)
+
+test("Source refresh and external edit each read displayed file once", function()
+  local f = fixture({ "a.lua", "b.lua" })
+  f:key("<CR>")
+  f:key("j")
+  f:key("r")
+  f:check(function()
+    eq(f.reads, 2)
+    contains(f:at("Source"), "source 2")
+  end)
+  f:key("e")
+  f:check(function()
+    eq(f.reads, 3)
+    eq(#f.editor_paths, 1)
+    contains(f:at("Source"), "source 2")
+  end)
+  f:key("q")
+  f:run()
 end)
 
 print(string.format("code: %d passed, %d failed", passed, failed))

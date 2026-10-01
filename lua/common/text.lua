@@ -1,6 +1,6 @@
 local M = {}
 
-local function chars(s)
+local function chars(s, visit)
   local out, i = {}, 1
   while i <= #s do
     local b = s:byte(i)
@@ -24,7 +24,14 @@ local function chars(s)
       valid = false
     end
     if valid then
-      out[#out + 1] = s:sub(i, i + n - 1)
+      local c = s:sub(i, i + n - 1)
+      if visit then
+        if visit(c) == false then
+          break
+        end
+      else
+        out[#out + 1] = c
+      end
       i = i + n
     else
       i = i + 1
@@ -98,38 +105,86 @@ function M.display_len(s)
   return n
 end
 
+local function wrap_line(raw, width)
+  local raw_width = M.display_len(raw)
+  if raw == "" or raw_width <= width then
+    return { raw }
+  end
+  local parts = chars(raw)
+  local widths, remaining = {}, 0
+  for i, c in ipairs(parts) do
+    widths[i] = M.display_len(c)
+    remaining = remaining + widths[i]
+  end
+  -- Native width may account for clusters rather than summing scalar widths.
+  local additive = remaining == raw_width
+  local lines, start = {}, 1
+  while start <= #parts do
+    local remainder_width = remaining
+    if not additive then
+      remainder_width = M.display_len(table.concat(parts, "", start))
+    end
+    if remainder_width <= width then
+      lines[#lines + 1] = table.concat(parts, "", start)
+      break
+    end
+    local cut, cells, space = start - 1, 0, nil
+    for i = start, #parts do
+      local next_cells = cells + widths[i]
+      if next_cells > width then
+        break
+      end
+      cut, cells = i, next_cells
+      if parts[i] == " " and cells >= math.max(width - 20, 1) then
+        space = i
+      end
+    end
+    cut = space or math.max(cut, start)
+    lines[#lines + 1] = table.concat(parts, "", start, cut)
+    local next_start = cut + 1
+    while next_start <= #parts and parts[next_start]:match("^%s$") do
+      next_start = next_start + 1
+    end
+    for i = start, next_start - 1 do
+      remaining = remaining - widths[i]
+    end
+    start = next_start
+  end
+  return lines
+end
+
 function M.wrap(text, width)
   width = math.max(math.floor(width), 1)
   local lines = {}
   for raw in (M.sanitize_utf8(text) .. "\n"):gmatch("(.-)\n") do
-    if raw == "" then
-      lines[#lines + 1] = ""
-    end
-    while #raw > 0 do
-      if M.display_len(raw) <= width then
-        lines[#lines + 1] = raw
-        break
-      end
-      local cut, cells, space = 0, 0, nil
-      for _, c in ipairs(chars(raw)) do
-        local next_cells = cells + M.display_len(c)
-        if next_cells > width then
-          break
-        end
-        cut, cells = cut + #c, next_cells
-        if c == " " and cells >= math.max(width - 20, 1) then
-          space = cut
-        end
-      end
-      if cut == 0 then
-        cut = #chars(raw)[1]
-      end
-      cut = space or cut
-      lines[#lines + 1] = raw:sub(1, cut)
-      raw = raw:sub(cut + 1):gsub("^%s+", "")
+    for _, line in ipairs(wrap_line(raw, width)) do
+      lines[#lines + 1] = line
     end
   end
   return lines
+end
+
+function M.first_line(text, width)
+  width = math.max(math.floor(width), 1)
+  local raw = M.sanitize_utf8(text:match("^[^\n]*"))
+  if raw == "" or M.display_len(raw) <= width then
+    return raw
+  end
+  local cut, cells, space = 0, 0, nil
+  chars(raw, function(c)
+    local next_cells = cells + M.display_len(c)
+    if next_cells > width then
+      if cut == 0 then
+        cut = #c
+      end
+      return false
+    end
+    cut, cells = cut + #c, next_cells
+    if c == " " and cells >= math.max(width - 20, 1) then
+      space = cut
+    end
+  end)
+  return raw:sub(1, space or cut)
 end
 
 function M.fit_path(path, max)
@@ -151,53 +206,6 @@ function M.fit_path(path, max)
     cells = cells + n
   end
   return "…" .. table.concat(tail)
-end
-
-function M.fill_input(state, windows, prompt, restore)
-  local closed = false
-  local ok, edited, err = pcall(function()
-    local guard, guard_err = maki.ui.input()
-    if not guard or guard_err then
-      return nil, guard_err or "No input snapshot returned"
-    end
-    closed = true
-    for _, name in ipairs(windows) do
-      if state[name] then
-        state[name]:close()
-        state[name] = nil
-      end
-    end
-    maki.async.sleep(16)
-    for attempt = 1, 5 do
-      local input, input_err = maki.ui.input()
-      if not input or input_err then
-        return nil, input_err or "No input snapshot returned"
-      end
-      if input.session_id ~= guard.session_id then
-        return nil, "Focused session changed"
-      end
-      local result, edit_err = maki.ui.input_edit({
-        start = #input.text,
-        stop = #input.text,
-        text = (input.text ~= "" and "\n\n" or "") .. prompt,
-        version = input.version,
-        session_id = guard.session_id,
-      })
-      if result or edit_err ~= "the chat input is not on screen, so it cannot be edited" or attempt == 5 then
-        return result, edit_err
-      end
-      maki.async.sleep(16)
-    end
-  end)
-  if not ok or not edited or err then
-    if closed then
-      restore()
-    end
-    maki.ui.flash("Failed to fill chat input: " .. tostring(ok and (err or "Input edit rejected") or edited))
-    return false
-  end
-  maki.ui.flash("Prompt filled into chat input — review and send manually")
-  return true
 end
 
 return M

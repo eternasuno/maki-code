@@ -30,4 +30,4 @@ This repository is a Maki Lua/Luau plugin package. Rust is a non-published test 
 3. Review `git diff --check` and the final diff. Report checks that failed or were not run.
 4. For UI behavior, ask for `/reload` and manual verification in Maki. Mock and Rust host tests do not exercise terminal rendering or native chat-input visibility.
 
-Review contains Luau `continue`; standalone Lua tests extract or adapt source sections. When renaming functions or moving dispatcher boundaries, inspect the test extraction markers rather than treating failures as runtime regressions.
+Production modules are directly executable by standalone Lua tests; do not extract or rewrite source to test event handlers. `tests/support/` owns host mocks; feature test modules are invoked by their suite entry points. Keep `just test-lua` discovery aligned with new standalone suites.

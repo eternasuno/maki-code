@@ -1,6 +1,6 @@
 local M = {}
-local Utils = require("common.utils")
-local display_len = Utils.display_len
+local Text = require("common.text")
+local display_len = Text.display_len
 
 local function hex_rgb(hex)
   local h = hex:gsub("#", "")
@@ -72,7 +72,7 @@ function M.panel_config(width, title, active, footer)
   end
   return {
     border = "none",
-    title = Utils.fit_path(title:match("^%s*(.-)%s*$"), math.max(available - 2, 0)),
+    title = Text.fit_path(title:match("^%s*(.-)%s*$"), math.max(available - 2, 0)),
     footer = fitted,
     active = active,
   }
@@ -82,11 +82,16 @@ function M.open_panel(buf, opts)
   local width, height = math.max(opts.width, 1), math.max(opts.height, 1)
   local frame_buf = maki.ui.buf()
   local config = { title = opts.title or "", footer = opts.footer or {}, active = opts.focus == true }
+  local initial_footer = config.footer
+  config.footer = {}
+  for i, pair in ipairs(initial_footer) do
+    config.footer[i] = { pair[1], pair[2] }
+  end
   local function edge(left, right, text, style)
     if width == 1 then
       return { { left, style } }
     end
-    text = Utils.fit_path(text, width - 2)
+    text = Text.fit_path(text, width - 2)
     return { { left .. text .. string.rep("─", width - 2 - display_len(text)) .. right, style } }
   end
   local function render()
@@ -139,7 +144,9 @@ function M.open_panel(buf, opts)
     zindex = 50,
   })
   if not ok then
-    frame:close()
+    pcall(function()
+      frame:close()
+    end)
     error(content)
   end
   local panel = { width = content.width, height = content.height }
@@ -150,33 +157,50 @@ function M.open_panel(buf, opts)
     return content:set_cursor(row)
   end
   function panel:set_config(next_config)
-    for _, key in ipairs({ "title", "footer", "active" }) do
-      if next_config[key] ~= nil then
+    local changed = false
+    for _, key in ipairs({ "title", "active" }) do
+      if next_config[key] ~= nil and next_config[key] ~= config[key] then
         config[key] = next_config[key]
+        changed = true
       end
     end
-    render()
-  end
-  function panel:close()
-    content:close()
-    frame:close()
-  end
-  function panel:hide()
-    content:hide()
-    frame:hide()
-  end
-  function panel:show()
-    if opts.height <= 0 then
-      return
+    if next_config.footer ~= nil then
+      local footer = next_config.footer
+      local same = #footer == #config.footer
+      for i, pair in ipairs(footer) do
+        local old = config.footer[i]
+        if not old or old[1] ~= pair[1] or old[2] ~= pair[2] then
+          same = false
+        end
+      end
+      if not same then
+        config.footer = {}
+        for i, pair in ipairs(footer) do
+          config.footer[i] = { pair[1], pair[2] }
+        end
+        changed = true
+      end
     end
-    frame:show()
-    content:show()
+    if changed then
+      render()
+    end
   end
-  function panel:is_open()
-    return content:is_open() and frame:is_open()
-  end
-  function panel:is_visible()
-    return content:is_visible() and frame:is_visible()
+  local content_closed, frame_closed = false, false
+  function panel:close()
+    local content_err, frame_err
+    if not content_closed then
+      content_closed, content_err = pcall(function()
+        content:close()
+      end)
+    end
+    if not frame_closed then
+      frame_closed, frame_err = pcall(function()
+        frame:close()
+      end)
+    end
+    if not content_closed or not frame_closed then
+      error(not content_closed and content_err or frame_err)
+    end
   end
   return panel
 end

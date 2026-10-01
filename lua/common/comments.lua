@@ -1,7 +1,17 @@
 local M = {}
+local versions = setmetatable({}, { __mode = "k" })
+
+function M.version(store)
+  return versions[store] or 0
+end
+
+local function changed(store)
+  versions[store] = M.version(store) + 1
+end
 
 function M.add(store, record)
   store[#store + 1] = record
+  changed(store)
   return #store
 end
 
@@ -10,6 +20,7 @@ function M.update(store, index, record)
     return nil
   end
   store[index] = record
+  changed(store)
   return record
 end
 
@@ -17,11 +28,8 @@ function M.remove(store, index)
   if not store[index] then
     return nil
   end
+  changed(store)
   return table.remove(store, index)
-end
-
-function M.list(store)
-  return store
 end
 
 function M.kind(record)
@@ -74,8 +82,26 @@ function M.count_under_path(store, path, predicate)
   return count
 end
 
-function M.count_for_file(store, file)
-  return M.count_for_path(store, file)
+function M.index(store, predicate)
+  local result = { by_path = {}, exact = {}, under = {} }
+  for i, record in ipairs(store) do
+    local path = M.path(record)
+    if path and (not predicate or predicate(record)) then
+      local entries = result.by_path[path]
+      if not entries then
+        entries = {}
+        result.by_path[path] = entries
+      end
+      entries[#entries + 1] = { record = record, index = i }
+      result.exact[path] = (result.exact[path] or 0) + 1
+      result.under[path] = (result.under[path] or 0) + 1
+      for slash in path:gmatch("()/") do
+        local ancestor = path:sub(1, slash - 1)
+        result.under[ancestor] = (result.under[ancestor] or 0) + 1
+      end
+    end
+  end
+  return result
 end
 
 return M

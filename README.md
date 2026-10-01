@@ -52,7 +52,7 @@ Submission only fills the **current chat input**: it never creates a session or 
 
 Before filling the input, the plugin closes its windows to release focus and briefly waits for the UI to process the close commands. If the input remains off screen, it retries a limited number of times. Switching sessions during this operation cancels the edit; failures retain comments and reopen the plugin UI.
 
-`/code` source reading reports missing, binary/control-character, or invalid UTF-8 files. Files larger than **1 MiB** are not opened; files with more than **10,000 lines** display the first 10,000 with a notice. `/code` reports Git listing errors and truncated subprocess output rather than using a partial list.
+`/code` source reading reports missing, binary/control-character, or invalid UTF-8 files. Files larger than **1 MiB** are not opened; files with more than **10,000 lines** display the first 10,000 with a notice. Both plugins report Git errors and truncated subprocess output rather than using partial lists; failed refreshes retain usable prior data. `/review` uses repository-root-relative paths for tracked, untracked, and historical changes, including renames and filenames containing tabs or newlines, even when started in a subdirectory.
 
 ## Package layout
 
@@ -61,15 +61,31 @@ plugin/
 ├── review.lua             require("review").setup()
 └── code.lua               require("code").setup()
 lua/
-├── review/init.lua        Git/diff review and TurnEnd reminder
-├── code/init.lua          Workspace/source review
+├── review/
+│   ├── init.lua           Registration and TurnEnd reminder
+│   ├── browser.lua        Events, navigation, comment editing
+│   ├── git.lua            Root-relative Git commands and NUL path parsing
+│   ├── files.lua          Preview cache and refresh
+│   ├── diff.lua           Diff parsing and highlight mapping
+│   ├── comments.lua       Independent store, anchors, and prompts
+│   ├── render.lua         Panel invalidation and draw coordination
+│   ├── render_lists.lua   Prepared tree maps and left lists
+│   ├── render_diff.lua    Diff, commit, and comment details
+│   └── windows.lua        Window layout and lifecycle
+├── code/
+│   ├── init.lua           Registration
+│   ├── browser.lua        State, navigation, and events
+│   ├── files.lua          Listing, source reading, search, and tree maps
+│   ├── comments.lua       Independent store, editing, and prompts
+│   └── render.lua         Cached panel rendering and window layout
 └── common/
     ├── tree.lua           Business-neutral compressed trees
-    ├── comments.lua       Caller-owned comment list operations
+    ├── comments.lua       Caller-owned CRUD and derived path indexes
     ├── highlight.lua      Language inference and highlighting fallback
-    ├── layout.lua         Sizing, spans, backgrounds, colors
+    ├── layout.lua         Panel frames, sizing, spans, and colors
     ├── shell.lua          Quoting and checked subprocess execution
-    └── utils.lua          Unicode, wrapping, path fitting, chat input filling
+    ├── text.lua           Unicode, wrapping, summaries, and path fitting
+    └── input.lua          Guarded chat input filling
 plugin.toml                Package permission request
 ```
 
@@ -124,7 +140,7 @@ From the repository root, using Lua 5.2 or later:
 just test-lua
 ```
 
-This runs `tests/review_keys.lua`, `tests/code.lua`, and `tests/common.lua`. The Lua tests exercise editor and navigation regressions, mocked Maki handlers, setup idempotency, shared primitives, and input filling: draft preservation, queued window closure, edit failures, bounded retries, and session-switch guards. Review tests adapt Luau `continue` for standalone Lua without exercising those branches.
+This runs `tests/review_keys.lua`, `tests/review_git.lua`, `tests/code.lua`, and `tests/common.lua`. Feature suites execute the original modules directly, including event handlers; no source extraction or syntax rewriting is used. `tests/code_search.lua` and `tests/common_text.lua` are invoked by their parent suites, while `tests/support/` holds the code and review host mocks. Tests cover navigation, comments, setup idempotency, Git errors and unusual paths, queued window closure, draft preservation, bounded retries, and session/version guards. Hotspot regressions assert tree, file-read, rendering, and text-measurement call counts, not fixed timing thresholds.
 
 The Rust harness follows the Maki repository’s default branch without a fixed `rev` in `Cargo.toml`; `Cargo.lock` records the resolved commit for reproducible runs. It tests package loading, registered commands, shared APIs, permissions, and Git fixtures:
 
