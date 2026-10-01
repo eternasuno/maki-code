@@ -1,3 +1,5 @@
+package.path = "./lua/?.lua;./lua/?/init.lua;" .. package.path
+local Comments = require("common.comments")
 local path = arg[1] or "lua/review/init.lua"
 local file = assert(io.open(path, "r"))
 local source = file:read("*a")
@@ -9,8 +11,6 @@ local function extract(first, last)
   return source:sub(start, finish - 1)
 end
 
-local make_comment = extract("local function make_comment(", "local function line_range_label(")
-local save_comment = extract("local function save_comment(", "local function delete_comment(")
 local dispatcher = extract("    local key = ev.key", "\n  end\n\n  for _, w in ipairs")
 dispatcher = dispatcher:gsub("%f[%a]continue%f[%A]", "return"):gsub("%f[%a]break%f[%A]", "return")
 local panes = extract("local PANE_KEYS =", "local function toggle_dir(")
@@ -18,6 +18,7 @@ local panes = extract("local PANE_KEYS =", "local function toggle_dir(")
 local flashes = {}
 local env = setmetatable({
   comments = {},
+  Comments = Comments,
   TextInput = { Result = { IGNORED = "ignored" } },
   maki = { ui = {
     flash = function(message)
@@ -48,7 +49,12 @@ local env = setmetatable({
 }, { __index = _G })
 local dispatch = assert(
   load(
-    make_comment .. save_comment .. panes .. "\nreturn function(state, ev)\n" .. dispatcher .. "\nend",
+    extract("local function covers(", "--- submit")
+      .. extract("local function open_comment_editor(", "local function delete_comment(")
+      .. panes
+      .. "\nreturn function(state, ev)\n"
+      .. dispatcher
+      .. "\nend",
     path,
     "t",
     env
@@ -68,7 +74,13 @@ local function state(text, existing_idx, result)
     redraws = 0,
     change = { path = "example.lua", commit = "abc" },
     dlines = { { kind = "add", new_ln = 7, text = "new line" } },
-    centry = { input = input, from = 1, to = 1, existing_idx = existing_idx },
+    centry = {
+      input = input,
+      from = 1,
+      to = 1,
+      existing_idx = existing_idx,
+      record = { target = { kind = "line", path = "example.lua" }, commit = "abc", new_start = 7, new_end = 7 },
+    },
   },
     input
 end
@@ -90,7 +102,9 @@ test("Enter saves a trimmed new comment", function()
   press(current, "<CR>")
   assert(current.centry == nil)
   assert(#env.comments == 1 and env.comments[1].text == "new comment")
-  assert(env.comments[1].file == "example.lua" and env.comments[1].commit == "abc")
+  assert(
+    env.comments[1].file == nil and env.comments[1].target.path == "example.lua" and env.comments[1].commit == "abc"
+  )
   assert(env.comments[1].new_start == 7 and env.comments[1].new_end == 7)
   assert(current.redraws == 1 and #input.forwarded == 0)
 end)
@@ -435,6 +449,7 @@ local function panel_fixture(cols, rows)
       end,
     }, { __index = Layout }),
     comments = {},
+    Comments = Comments,
     fit_path = Utils.fit_path,
     display_len = Utils.display_len,
     render_change_list = mapped,
@@ -655,6 +670,7 @@ local function submission_fixture(draft)
   local submit_env = setmetatable({
     maki = maki,
     Utils = require("common.utils"),
+    Comments = Comments,
     comments = {
       { file = "example.lua", new_start = 7, new_end = 8, text = "fix it", snippet = "+line", commit = "abc" },
     },
@@ -770,5 +786,219 @@ for _, tick in ipairs({ 1, 2 }) do
     assert(f.flashes[#f.flashes]:find("Focused session changed", 1, true))
   end)
 end
+
+env.TextInput.new = function()
+  local input = { text = "" }
+  function input:insert_text(text)
+    self.text = self.text .. text
+  end
+  function input:value()
+    return self.text
+  end
+  function input:render()
+    return { lines = { { { self.text, "item" } } } }
+  end
+  return input
+end
+
+for _, pane in ipairs({ "files", "commits" }) do
+  for _, kind in ipairs({ "file", "dir" }) do
+    test(pane .. " c captures " .. kind .. " target without a diff", function()
+      local selected = kind == "dir" and { dir = "src/deep" } or 1
+      local current = {
+        pane = pane,
+        src = pane,
+        redraws = 0,
+        fcursor = 1,
+        ccursor = 1,
+        frow_map = { selected },
+        crow_map = { selected },
+        wchanges = { { path = "src/deep/a.lua" } },
+        commit_changes = { { path = "src/deep/a.lua", commit = "abc" } },
+        commit = pane == "commits" and { sha = "abc" } or nil,
+      }
+      press(current, "c")
+      assert(current.centry and current.centry.path_editor)
+      local record = current.centry.record
+      assert(record.target.kind == kind and record.file == nil)
+      assert(record.target.path == (kind == "dir" and "src/deep" or "src/deep/a.lua"))
+      assert(record.commit == (pane == "commits" and "abc" or nil))
+      current.centry.input:insert_text(" rename it ")
+      current.change = { path = "unrelated", commit = "other" }
+      press(current, "<CR>")
+      assert(env.comments[1] == record and record.text == "rename it")
+    end)
+  end
+end
+
+test("diff c ignores path comments and retains line range and snapshot", function()
+  env.comments[1] = { target = { kind = "file", path = "a.lua" }, text = "whole file", new_start = 7, new_end = 7 }
+  local current = {
+    pane = "diff",
+    redraws = 0,
+    change = { path = "a.lua" },
+    dcursor = 2,
+    drow_map = { 1, 2 },
+    vstart = 1,
+    vcur = 2,
+    dlines = { { kind = "del", old_ln = 6, text = "old" }, { kind = "add", new_ln = 7, text = "new" } },
+  }
+  press(current, "c")
+  local record = current.centry.record
+  assert(current.centry.existing_idx == nil and record.target.kind == "line")
+  assert(record.old_start == 6 and record.new_start == 7 and record.snippet:find("+new", 1, true))
+  current.centry.input:insert_text("fix range")
+  current.change, current.dlines = nil, nil
+  press(current, "<CR>")
+  assert(#env.comments == 2 and env.comments[2] == record)
+end)
+
+for _, kind in ipairs({ "line", "file", "dir" }) do
+  test("Comments c edits and blank preserves " .. kind, function()
+    local record = {
+      target = { kind = kind, path = "src/a.lua" },
+      text = "original",
+      commit = "abc",
+      new_start = 2,
+      new_end = 4,
+      snippet = "+snapshot",
+    }
+    env.comments[1] = record
+    local current = { pane = "comments", mcursor = 1, mrow_map = { 1 }, redraws = 0 }
+    press(current, "c")
+    assert(current.centry.input:value() == "original" and current.centry.path_editor)
+    current.centry.input.text = "  "
+    press(current, "<CR>")
+    assert(record.text == "original")
+    press(current, "c")
+    current.centry.input.text = " edited "
+    press(current, "<CR>")
+    assert(record.text == "edited" and record.commit == "abc" and record.new_start == 2)
+  end)
+end
+
+test("mixed prompts distinguish paths from diff ranges", function()
+  local f, current, submit_env, submit = submission_fixture()
+  submit_env.comments[#submit_env.comments + 1] =
+    { target = { kind = "file", path = "config.lua" }, text = "rename", commit = "def" }
+  submit_env.comments[#submit_env.comments + 1] = { target = { kind = "dir", path = "src" }, text = "reorganize" }
+  assert(submit(current))
+  local prompt = f.edits[1].text
+  assert(prompt:find("lines 7-8, commit abc", 1, true))
+  assert(prompt:find("File comment, commit def", 1, true) and prompt:find("Directory comment", 1, true))
+  local _, fences = prompt:gsub("```diff", "")
+  assert(fences == 1 and prompt:find("current workspace", 1, true) and prompt:find("rename, move, delete", 1, true))
+end)
+
+local mixed_env = setmetatable({
+  Comments = Comments,
+  Tree = require("common.tree"),
+  Layout = Layout,
+  COMMENT_MARK = "● ",
+  COM_TINT = { "#e3b341" },
+  pad_spans = Layout.pad_spans,
+  restyle = Layout.restyle,
+  fit_path = Utils.fit_path,
+  display_len = Utils.display_len,
+  wrap = Utils.wrap,
+  get_tints = function()
+    return {}
+  end,
+  maki = env.maki,
+}, { __index = _G })
+local render_tree, render_list, render_detail, remove_mixed, refresh_mixed = assert(
+  load(
+    extract("local function comment_count(", "-- Returns array")
+      .. extract("local function line_range_label(", "--- submit")
+      .. extract("local STATUS_STYLE =", "local function render_commit_list(")
+      .. extract("local function render_comment_list(", "-- Renders the diff")
+      .. extract("local function render_comment_detail(", "-- Renders a left panel")
+      .. extract("local function delete_selected_comment(", "--- navigation")
+      .. extract("local function refresh(", "local function edit_selected_file(")
+      .. "return render_change_list, render_comment_list, render_comment_detail, delete_selected_comment, refresh",
+    path,
+    "t",
+    mixed_env
+  )
+)()
+local function buffer()
+  return {
+    set_lines = function(self, lines)
+      self.lines = lines
+    end,
+  }
+end
+local function text_of(buf)
+  local rows = {}
+  for _, row in ipairs(buf.lines) do
+    local spans = {}
+    for _, span in ipairs(row) do
+      spans[#spans + 1] = span[1]
+    end
+    rows[#rows + 1] = table.concat(spans)
+  end
+  return table.concat(rows, "\n")
+end
+
+test("mixed rendering counts compressed ancestors and isolates commits", function()
+  mixed_env.comments = {
+    { file = "src/deep/a.lua", text = "line", new_start = 1, new_end = 1, snippet = "+line" },
+    { target = { kind = "file", path = "src/deep/a.lua" }, text = "file" },
+    { target = { kind = "dir", path = "src/deep" }, text = "directory" },
+    { target = { kind = "dir", path = "src" }, text = "ancestor" },
+    { target = { kind = "dir", path = "src" }, text = "historical", commit = "abc" },
+  }
+  local current = { lwidth = 100, rwidth = 100, pane = "comments", mcursor = 1, mbuf = buffer(), rbuf = buffer() }
+  local buf = buffer()
+  local changes = { { path = "src/deep/a.lua", status = "M", adds = 1, dels = 0 } }
+  render_tree(current, buf, changes, 1, false, "", {})
+  assert(text_of(buf):find("● 4", 1, true) and text_of(buf):find("● 2", 1, true))
+  changes[1].commit = "abc"
+  render_tree(current, buf, changes, 1, false, "", {})
+  assert(text_of(buf):find("● 1", 1, true) and not text_of(buf):find("● 4", 1, true))
+  current.mrow_map = render_list(current)
+  assert(
+    text_of(current.mbuf):find("File src/deep/a.lua", 1, true) and text_of(current.mbuf):find("Dir src/deep/", 1, true)
+  )
+  for i = 1, 5 do
+    current.mcursor = i
+    render_detail(current)
+    local rendered = text_of(current.rbuf)
+    if i == 1 then
+      assert(rendered:find("line 1", 1, true))
+    elseif i == 2 then
+      assert(rendered:find("File comment", 1, true))
+    else
+      assert(rendered:find("Directory comment", 1, true))
+    end
+  end
+end)
+
+test("path editor renders without diff and mixed deletion refresh retain store", function()
+  local current, redraw = panel_fixture(120, 30)
+  current.centry = {
+    path_editor = true,
+    label = "Directory comment",
+    record = { target = { kind = "dir", path = "src" } },
+    input = env.TextInput.new(),
+  }
+  current.rbuf = buffer()
+  current.centry.input:insert_text("move directory")
+  redraw(current)
+  assert(text_of(current.rbuf):find("move directory", 1, true))
+  local records = mixed_env.comments
+  mixed_env.load_preview = function() end
+  mixed_env.redraw = function() end
+  mixed_env.git_changes = function()
+    return {}
+  end
+  mixed_env.git_log = function()
+    return {}
+  end
+  refresh_mixed({ cache = { stale = true } })
+  assert(mixed_env.comments == records and #records == 5)
+  remove_mixed({ mcursor = 3, mrow_map = { [3] = 3 } })
+  assert(#records == 4 and records[3].text == "ancestor")
+end)
 
 print(tests .. " tests passed")

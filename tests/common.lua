@@ -304,6 +304,49 @@ test("comments add update remove list and per-file count", function()
   eq(store[1].file, "b")
 end)
 
+test("comments mixed targets exact subtree counts and locations", function()
+  local store = {}
+  local line = { target = { kind = "line", path = "src/api/foo.lua" }, start_line = 2, end_line = 4 }
+  local file = { target = { kind = "file", path = "src/api/foo.lua" }, commit = "abc" }
+  local dir = { target = { kind = "dir", path = "src/api" } }
+  eq(Comments.add(store, line), 1)
+  eq(Comments.add(store, file), 2)
+  eq(Comments.add(store, dir), 3)
+  Comments.add(store, { target = { kind = "file", path = "src/api-other/bar.lua" } })
+  eq(Comments.count_for_path(store, "src/api/foo.lua"), 2)
+  eq(Comments.count_for_path(store, "src/api"), 1)
+  eq(Comments.count_under_path(store, "src/api"), 3)
+  eq(Comments.count_under_path(store, "src/api/"), 3)
+  eq(Comments.count_under_path(store, "src"), 4)
+  eq(Comments.count_under_path(store, "missing"), 0)
+  eq(
+    Comments.count_under_path(store, "src/api", function(record)
+      return record.commit == "abc"
+    end),
+    1
+  )
+  eq(
+    Comments.count_for_path(store, "src/api/foo.lua", function(record)
+      return record.commit == nil
+    end),
+    1
+  )
+  eq(Comments.location(line), "src/api/foo.lua:2-4")
+  eq(Comments.location(file), "src/api/foo.lua")
+  eq(Comments.location(dir), "src/api/")
+  eq(Comments.kind(line), "line")
+  eq(Comments.path(dir), "src/api")
+  eq(Comments.location({ file = "old.lua", start_line = 1, end_line = 1 }), "old.lua:1")
+  eq(Comments.location({ file = "old.lua", anchor = "old", old_start = 3, old_end = 5 }), "old.lua:3-5")
+  eq(Comments.location({ file = "old.lua" }), "old.lua:?")
+  local replacement = { target = { kind = "dir", path = "other" }, text = "edited" }
+  eq(Comments.update(store, 3, replacement), replacement)
+  eq(Comments.count_under_path(store, "src/api"), 2)
+  eq(Comments.remove(store, 2), file)
+  eq(Comments.count_for_path(store, "src/api/foo.lua"), 1)
+  eq(Comments.list(store), store)
+end)
+
 test("layout spans are padded and styles copied without mutation", function()
   maki = nil
   local spans = { { "界", { fg = "red", bold = true } }, { "é", "item" } }

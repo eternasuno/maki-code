@@ -14,10 +14,6 @@ local function display(text)
   return Utils.sanitize_utf8(text):gsub("[%z\1-\8\11\12\14-\31\127]", "?")
 end
 
-local function line_label(first, last)
-  return first == last and tostring(first) or (first .. "-" .. last)
-end
-
 local function clamp(n, count)
   return math.max(1, math.min(n, count))
 end
@@ -104,7 +100,12 @@ local function current_comment(state)
     return store[state.comment_cursor], state.comment_cursor
   end
   for index, comment in ipairs(store) do
-    if comment.file == state.file and state.line >= comment.start_line and state.line <= comment.end_line then
+    if
+      Comments.kind(comment) == "line"
+      and Comments.path(comment) == state.file
+      and state.line >= comment.start_line
+      and state.line <= comment.end_line
+    then
       return comment, index
     end
   end
@@ -121,39 +122,47 @@ local function snapshot(state, first, last)
 end
 
 local function open_editor(state)
-  local old, index
+  local old, index, record
   if state.pane == "comments" then
     old, index = store[state.comment_cursor], state.comment_cursor
     if not old then
       return
     end
-    load_source(state, old.file, old.start_line)
-    state.pane = "source"
-  end
-  if state.pane ~= "source" or not state.lines then
+    if Comments.kind(old) ~= "dir" then
+      load_source(state, Comments.path(old), old.start_line or 1)
+    end
+  elseif state.pane == "files" then
+    local row = state.rows[state.file_cursor]
+    if not row then
+      return
+    end
+    record = { target = { kind = row.dir and "dir" or "file", path = row.dir or state.filtered_paths[row.idx] } }
+  elseif state.pane == "source" and state.lines then
+    old, index = current_comment(state)
+    if not old then
+      local first, last = state.line, state.line
+      if state.anchor then
+        first, last = math.min(state.anchor, state.line), math.max(state.anchor, state.line)
+      end
+      record = {
+        target = { kind = "line", path = state.file },
+        start_line = first,
+        end_line = last,
+        snippet = snapshot(state, first, last),
+      }
+    end
+  else
     return
   end
-  if not old then
-    old, index = current_comment(state)
-  end
-  local first, last = state.line, state.line
-  if state.anchor then
-    first, last = math.min(state.anchor, state.line), math.max(state.anchor, state.line)
-  end
   if old then
-    first, last = old.start_line, old.end_line
+    record = {}
+    for key, value in pairs(old) do
+      record[key] = value
+    end
   end
   local input = TextInput.new()
-  if old then
-    input:insert_text(old.text)
-  end
-  state.editor = {
-    input = input,
-    index = index,
-    first = first,
-    last = last,
-    snippet = old and old.snippet or snapshot(state, first, last),
-  }
+  input:insert_text(old and old.text or "")
+  state.editor = { input = input, index = index, record = record }
   state.anchor = nil
 end
 
@@ -161,13 +170,8 @@ local function save_editor(state)
   local editor = state.editor
   local text = editor.input:value():match("^%s*(.-)%s*$")
   if text ~= "" then
-    local record = {
-      file = state.file,
-      start_line = editor.first,
-      end_line = editor.last,
-      text = text,
-      snippet = editor.snippet,
-    }
+    local record = editor.record
+    record.text = text
     if editor.index then
       Comments.update(store, editor.index, record)
     else
@@ -183,17 +187,27 @@ local function submit(state, restore)
     return false
   end
   local prompt = {
-    "Please address the following source review comments as modification requests for the current workspace. Locate each request by file and line/range and modify the code accordingly. Read the actual current files before making changes. The snippets are context snapshots and may be stale; verify the current contents and line locations.\n",
+    "Please address the following source, file, and directory comments as modification requests for the current workspace. Read the actual current files before making changes. Paths and snippets may be stale; verify the current contents and line locations. Requests may require renaming, moving, deleting, reorganizing, or creating related paths.\n",
   }
   for _, comment in ipairs(Comments.list(store)) do
-    prompt[#prompt + 1] = string.format(
-      "File: %s\nLines: %d-%d\nComment: %s\nContext snapshot (may be stale):\n%s\n",
-      comment.file,
-      comment.start_line,
-      comment.end_line,
-      comment.text,
-      comment.snippet or ""
-    )
+    local kind, path = Comments.kind(comment), Comments.path(comment)
+    if kind == "line" then
+      prompt[#prompt + 1] = string.format(
+        "Target: source\nFile: %s\nLines: %d-%d\nComment: %s\nContext snapshot (may be stale):\n%s\n",
+        path,
+        comment.start_line,
+        comment.end_line,
+        comment.text,
+        comment.snippet or ""
+      )
+    else
+      prompt[#prompt + 1] = string.format(
+        "Target: %s\nPath: %s\nComment: %s\n",
+        kind == "dir" and "directory" or "file",
+        Comments.location(comment),
+        comment.text
+      )
+    end
   end
   if not Utils.fill_input(state, { "swin", "mwin", "fwin" }, table.concat(prompt, "\n"), restore) then
     return false
@@ -274,6 +288,12 @@ local function flatten_tree(state)
   state.rows = Tree.flatten(state.tree, collapsed)
 end
 
+local function first_directory(row)
+  -- A compressed row represents every directory in its displayed name chain.
+  local suffix = row.name:match("^[^/]+(/.*)$") or ""
+  return row.dir:sub(1, #row.dir - #suffix)
+end
+
 local function redraw(state)
   flatten_tree(state)
   state.file_cursor = clamp(state.file_cursor, #state.rows)
@@ -283,11 +303,10 @@ local function redraw(state)
     local label = string.rep("  ", row.depth)
       .. (row.dir and (state.effective_collapsed[row.dir] and "▸ " or "▾ ") or "  ")
       .. display(row.name)
-    if row.idx then
-      local count = Comments.count_for_file(store, state.filtered_paths[row.idx])
-      if count > 0 then
-        label = label .. " ●" .. count
-      end
+    local count = row.dir and Comments.count_under_path(store, first_directory(row))
+      or Comments.count_for_path(store, state.filtered_paths[row.idx])
+    if count > 0 then
+      label = label .. " ●" .. count
     end
     local spans = { { Utils.fit_path(label, state.width - 2), row.dir and "accent" or "item" } }
     if state.pane == "files" and index == state.file_cursor then
@@ -302,9 +321,7 @@ local function redraw(state)
   state.fwin:set_cursor(state.file_cursor)
   local comment_lines = {}
   for index, comment in ipairs(store) do
-    local location = Utils.fit_path(display(comment.file), math.max(1, state.width - 12))
-      .. ":"
-      .. line_label(comment.start_line, comment.end_line)
+    local location = Utils.fit_path(display(Comments.location(comment)), math.max(1, state.width - 12))
     local preview = display(comment.text):gsub("\n", " ")
     local available = state.width - Utils.display_len(location) - 3
     local label = location
@@ -326,6 +343,18 @@ local function redraw(state)
   local function append(spans)
     source[#source + 1] = spans
   end
+  local function append_editor()
+    local record = state.editor.record
+    append({ { "    ┌ Comment: " .. display(Comments.location(record)) .. "  Enter: save  Esc: cancel", "accent" } })
+    local rendered =
+      state.editor.input:render("    │ ", Utils.display_len("    │ "), math.max(1, state.source_width - 8))
+    local start = #source
+    for _, entry in ipairs(rendered.lines) do
+      append(entry)
+    end
+    cursor = start + rendered.cursor_row
+    append({ { "    └", "accent" } })
+  end
   if not state.lines then
     append({ { state.error or "Select a file on the left", "dim" } })
   else
@@ -338,7 +367,12 @@ local function redraw(state)
     for line, text in ipairs(state.lines) do
       local marked = false
       for _, comment in ipairs(store) do
-        if comment.file == state.file and line >= comment.start_line and line <= comment.end_line then
+        if
+          Comments.kind(comment) == "line"
+          and Comments.path(comment) == state.file
+          and line >= comment.start_line
+          and line <= comment.end_line
+        then
           marked = true
         end
       end
@@ -357,19 +391,19 @@ local function redraw(state)
         end
       end
       append(spans)
-      if state.editor and line == math.min(state.editor.last, #state.lines) then
-        append({ { "    ┌ Comment  Enter: save  Esc: cancel", "accent" } })
-        local rendered =
-          state.editor.input:render("    │ ", Utils.display_len("    │ "), math.max(1, state.source_width - 8))
-        local start = #source
-        for _, entry in ipairs(rendered.lines) do
-          append(entry)
-        end
-        cursor = start + rendered.cursor_row
-        append({ { "    └", "accent" } })
+      if
+        state.editor
+        and Comments.kind(state.editor.record) == "line"
+        and line == math.min(state.editor.record.end_line, #state.lines)
+      then
+        append_editor()
       end
       for _, comment in ipairs(store) do
-        if comment.file == state.file and line == math.min(comment.end_line, #state.lines) then
+        if
+          Comments.kind(comment) == "line"
+          and Comments.path(comment) == state.file
+          and line == math.min(comment.end_line, #state.lines)
+        then
           append(
             Layout.pad_spans(
               Layout.with_bg(
@@ -396,6 +430,9 @@ local function redraw(state)
       append({ { "Showing first 10000 lines (display limit)", "warning" } })
     end
   end
+  if state.editor and (Comments.kind(state.editor.record) ~= "line" or not state.lines) then
+    append_editor()
+  end
   state.sbuf:set_lines(source)
   state.swin:set_cursor(cursor)
   local files_active = state.pane == "files" and not state.editor
@@ -406,7 +443,7 @@ local function redraw(state)
     files_title = files_title .. "/" .. display(state.search_query) .. " "
   end
   local files_hints = state.search_input and { { "Enter", "keep" }, { "Esc", "clear" } }
-    or { { "/", "search" }, { "Enter", "open" }, { "e", "edit" }, { "r", "refresh" }, { "Esc", "clear/close" } }
+    or { { "/", "search" }, { "Enter", "open" }, { "c", "comment" }, { "e", "edit" }, { "r", "refresh" } }
   state.fwin:set_config(
     Layout.panel_config(state.panel_width, files_title, files_active, files_active and files_hints or {})
   )
@@ -415,7 +452,7 @@ local function redraw(state)
       state.panel_width,
       " [2] Comments (" .. #store .. ") ",
       comments_active,
-      comments_active and { { "Enter", "jump" }, { "d", "delete" }, { "s", "submit" } } or {}
+      comments_active and { { "Enter", "jump" }, { "c", "edit" }, { "d", "delete" }, { "s", "submit" } } or {}
     )
   )
   local source_title = " [3] Source "
@@ -660,8 +697,30 @@ local function handle_key(state, key)
     elseif state.pane == "comments" and key ~= "l" then
       local comment = store[state.comment_cursor]
       if comment then
-        load_source(state, comment.file, comment.start_line)
-        state.pane = "source"
+        local path = Comments.path(comment)
+        if Comments.kind(comment) == "dir" then
+          state.pane = "files"
+          apply_search(state, "")
+          local ancestor = path
+          while ancestor do
+            state.collapsed[ancestor] = nil
+            ancestor = ancestor:match("^(.*)/[^/]+$")
+          end
+          flatten_tree(state)
+          for index, row in ipairs(state.rows) do
+            if
+              row.dir
+              and #path >= #first_directory(row)
+              and (row.dir == path or row.dir:sub(1, #path + 1) == path .. "/")
+            then
+              state.file_cursor = index
+              break
+            end
+          end
+        else
+          load_source(state, path, comment.start_line or 1)
+          state.pane = "source"
+        end
       end
     end
   end
@@ -736,7 +795,7 @@ function M.setup(opts)
   maki.api.register_command({
     name = "/code",
     description = description
-      or "Browse project source files, inspect code, add line/range comments, and submit comments to Maki.",
+      or "Browse workspace files, add source/file/directory comments, and submit comments to Maki.",
     handler = open_safe,
   })
   initialized = true

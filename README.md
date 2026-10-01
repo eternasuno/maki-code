@@ -20,14 +20,14 @@ Both file trees are collapsible and compress single-directory chains such as `sr
 | `g` / `Home`, `G` / `End` | First / last item or line |
 | `1` / `2` / `3` | `/code`: Files / Comments / Source; `/review`: Files / Commits / Comments |
 | `4` | `/review`: focus Diff (only when a diff is available) |
-| `Enter` / `Right` | Toggle directory or open file; `/review`: open commit; `/code` Comments: jump to the comment's file and line |
+| `Enter` / `Right` | Toggle directory or open file; `/review`: open commit; `/code` Comments: jump to the source line, file start, or directory tree node |
 | `l` | Toggle directory; `/review` Commits: enter the selected commit's files (does not switch panes) |
 | `h` | Collapse selected directory; `/review` Commits: return to the commit list (does not switch panes) |
 | `Left` | Collapse selected directory, return to the commit list, or return from source/diff to the left |
 | `/` | `/code` Files: edit the filename search query |
 | `Esc` | Clear `/code` Files search if active; otherwise cancel selection/editor, return left, or close |
 | `e` | Files: edit the selected working-tree file; `/code` Source: edit the displayed file in the default external editor |
-| `c` | Add or edit a comment on the current source/diff line |
+| `c` | Files (including commit files): add a file/directory comment; Source/Diff: add or edit a line/range comment; Comments: edit the selected comment |
 | `v` | Toggle range selection; move to the other end, then press `c` |
 | `d` | Delete the current line's comment or the selected Comments entry |
 | `s` | Fill the current Maki chat input with this plugin’s comments; review and send manually |
@@ -38,17 +38,17 @@ In `/code` Files, `/` starts a case-insensitive, literal substring search of fil
 
 In Files, `e` opens the selected existing regular file using `VISUAL`, falling back to `EDITOR`. In `/code` Source, it opens the displayed file independently of the Files selection, then refreshes its contents while keeping Source focused and preserving the current line (clamped if the file shrinks). Comments ignores `e`; in the inline comment editor it is ordinary text. Maki suspends the TUI and waits for the editor to exit, then reloads source/diffs even after a nonzero exit. Directories, missing files, and historical commit versions are not opened; editor failures are reported.
 
-In the inline comment editor, `Enter` saves and `Esc` / `Ctrl-C` cancels. TextInput handles editing keys, digits, and pasted text; number shortcuts do not switch panes while editing. Outside the editor, number shortcuts select the numbered panes and clear range selection on a pane change. `Tab` no longer switches panes; `j` / `k` still move rows. Blank comments are not saved. Editing an existing comment preserves its original range and context snapshot. Deletion updates the UI immediately.
+In the inline comment editor, `Enter` saves and `Esc` / `Ctrl-C` cancels. TextInput handles editing keys, digits, and pasted text; number shortcuts do not switch panes while editing. Outside the editor, number shortcuts select the numbered panes and clear range selection on a pane change. `Tab` no longer switches panes; `j` / `k` still move rows. Blank comments are not saved. Editing an existing comment preserves its original target, range, commit, and context snapshot. File/directory editors also work without readable source or a diff. Deletion updates the UI immediately.
 
-`/code` Comments entries show `file:line` or `file:start-end`, plus a short text preview when space permits. `Enter` / `Right` jumps to the corresponding source line. `/review` retains its comment detail view.
+Comments entries distinguish line/range locations (`file:line` or `file:start-end`), files (`path`), and directories (`path/`), with a short text preview when space permits. `/code` `Enter` / `Right` jumps to the source line, the file's first line, or the directory in Files; missing directory nodes remain safe to select and edit. `/review` retains its comment detail view. File tree badges count file plus line comments; directory badges include directory comments and all descendants, including compressed directory chains.
 
 ## Comments and submission
 
-Stores are independent: `/review` uses old/new diff anchors; `/code` uses `{file, start_line, end_line, text, snippet}`. Source snippets capture context at creation time, not at submission time.
+Stores are independent, with one mixed comment list per plugin. New records use `{target = {kind = "line" | "file" | "dir", path = "..."}, text = "..."}`. `/code` line records additionally keep `start_line`, `end_line`, and `snippet`; `/review` line records retain old/new diff anchors and snippets, and commit reviews retain `commit`. Path-level records need no line numbers or snippets. Source snippets capture context at creation time, not at submission time.
 
 Comments are **memory-only**. They survive closing and reopening the same plugin's UI, but disappear on `/reload` or process exit. They are never saved to disk. Refresh does not delete comments, including comments on files that have since disappeared.
 
-Submission only fills the **current chat input**: it never creates a session or sends automatically. Existing nonempty drafts are preserved, with two newlines before the appended prompt. `/review` describes the diff/commit context. `/code` explicitly asks the agent to locate requests by file and line/range, read actual current files, and modify the workspace; saved snippets may be stale and must not be assumed current. Successful submission clears only the submitting plugin's comments and closes its UI. Failed submission retains comments, restores the plugin windows and focus, and allows retrying. `/code` without comments flashes `No comments to submit`.
+Submission only fills the **current chat input**: it never creates a session or sends automatically. Existing nonempty drafts are preserved, with two newlines before the appended prompt. `/code` prompts distinguish `Target: source`, `Target: file`, and `Target: directory`; only source comments include lines and context snapshots. `/review` uses File/Directory comment headings for path targets and preserves diff ranges, snippets, and commit context for line comments. Both ask the agent to verify the current workspace because paths and snapshots may be stale. File/directory requests may rename, move, delete, reorganize, or create related files/directories; the plugins themselves never perform these operations. Successful submission clears only the submitting plugin's comments and closes its UI. Failed submission retains comments, restores the plugin windows and focus, and allows retrying. `/code` without comments flashes `No comments to submit`.
 
 Before filling the input, the plugin closes its windows to release focus and briefly waits for the UI to process the close commands. If the input remains off screen, it retries a limited number of times. Switching sessions during this operation cancels the edit; failures retain comments and reopen the plugin UI.
 

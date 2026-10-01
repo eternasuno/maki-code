@@ -47,8 +47,8 @@ local SEL_TINT = { "#58a6ff", 0.30 }
 local COM_TINT = { "#e3b341", 0.22 }
 
 -- One shared comment store per maki process, survives window close/reopen.
--- Entry: { file, text, anchor ("new"|"old"), new_start, new_end,
---          old_start, old_end, snippet }
+-- Entry: { target = { kind, path }, text, commit, anchor ("new"|"old"),
+--          new_start, new_end, old_start, old_end, snippet }
 local comments = {}
 
 --- shell helpers -----------------------------------------------------------
@@ -81,16 +81,9 @@ end
 --- git plumbing ------------------------------------------------------------
 
 local function comment_count(change)
-  if Comments.count_for_file(comments, change.path) == 0 then
-    return 0
-  end
-  local n = 0
-  for _, c in ipairs(comments) do
-    if c.file == change.path and c.commit == change.commit then
-      n = n + 1
-    end
-  end
-  return n
+  return Comments.count_for_path(comments, change.path, function(c)
+    return c.commit == change.commit
+  end)
 end
 
 -- Returns array of { path, status, adds, dels, untracked, binary } or nil, err.
@@ -284,6 +277,9 @@ end
 --- comments ----------------------------------------------------------------
 
 local function covers(c, dl)
+  if Comments.kind(c) ~= "line" then
+    return false
+  end
   if dl.kind == "del" then
     return c.old_start and dl.old_ln and dl.old_ln >= c.old_start and dl.old_ln <= c.old_end
   end
@@ -292,7 +288,12 @@ end
 
 local function comment_at(change, dl)
   for i, c in ipairs(comments) do
-    if c.file == change.path and c.commit == change.commit and covers(c, dl) then
+    if
+      Comments.kind(c) == "line"
+      and Comments.path(c) == change.path
+      and c.commit == change.commit
+      and covers(c, dl)
+    then
       return c, i
     end
   end
@@ -301,7 +302,7 @@ end
 
 -- Builds a comment record from a contiguous range of parsed diff lines.
 local function make_comment(change, dlines, from, to, text)
-  local c = { file = change.path, commit = change.commit, text = text }
+  local c = { target = { kind = "line", path = change.path }, commit = change.commit, text = text }
   for i = from, to do
     local dl = dlines[i]
     if dl.new_ln then
@@ -339,6 +340,11 @@ local function make_comment(change, dlines, from, to, text)
 end
 
 local function line_range_label(c)
+  if Comments.kind(c) == "file" then
+    return "File comment"
+  elseif Comments.kind(c) == "dir" then
+    return "Directory comment"
+  end
   if c.anchor == "old" then
     if c.old_start == c.old_end then
       return "removed line " .. c.old_start
@@ -356,17 +362,21 @@ end
 local function build_prompt()
   local by_file, order = {}, {}
   for _, c in ipairs(comments) do
-    if not by_file[c.file] then
-      by_file[c.file] = {}
-      order[#order + 1] = c.file
+    local path = Comments.path(c)
+    if not by_file[path] then
+      by_file[path] = {}
+      order[#order + 1] = path
     end
-    table.insert(by_file[c.file], c)
+    table.insert(by_file[path], c)
   end
 
   local p = {
     "I reviewed changes in this repository and left review comments. Comments refer either",
     "to the uncommitted diff vs HEAD, or to a specific commit's diff (noted as `commit <sha>`).",
     "Address every comment: apply the requested fix directly on the current working tree.",
+    "Verify the actual current workspace before editing; saved diffs and snippets may be stale.",
+    "File and directory comments apply to the whole path, not a line range.",
+    "Carry out requested path modifications: rename, move, delete, reorganize, or create files/directories.",
     "If a comment is a question, answer it and apply any change the answer implies.",
     "Line numbers refer to the file content on the commented side of the diff",
     '("removed" lines refer to the pre-change file).',
@@ -384,10 +394,12 @@ local function build_prompt()
       for cline in (c.text .. "\n"):gmatch("(.-)\n") do
         p[#p + 1] = "> " .. cline
       end
-      p[#p + 1] = ""
-      p[#p + 1] = "```diff"
-      p[#p + 1] = c.snippet
-      p[#p + 1] = "```"
+      if Comments.kind(c) == "line" then
+        p[#p + 1] = ""
+        p[#p + 1] = "```diff"
+        p[#p + 1] = c.snippet
+        p[#p + 1] = "```"
+      end
     end
     p[#p + 1] = ""
   end
@@ -396,7 +408,7 @@ end
 
 local function submit(state, restore)
   if #comments == 0 then
-    maki.ui.flash("No review comments yet — press c on a diff line first")
+    maki.ui.flash("No review comments yet — press c on a file, directory, or diff line")
     return false
   end
   local prompt = build_prompt()
@@ -437,15 +449,17 @@ local function render_change_list(state, buf, changes, cursor, active, empty_msg
 
   -- Total files and review comments under a directory node.
   local function dir_stats(d)
-    local nfiles, ncoms = #d.files, 0
-    for _, f in ipairs(d.files) do
-      ncoms = ncoms + comment_count(changes[f.idx])
-    end
+    local nfiles = #d.files
     for _, sub in ipairs(d.dorder) do
-      local sf, sc = dir_stats(sub)
-      nfiles = nfiles + sf
-      ncoms = ncoms + sc
+      nfiles = nfiles + dir_stats(sub)
     end
+    -- A compressed row represents all directories in its name chain.
+    local suffix = d.name:match("^[^/]+(/.*)$") or ""
+    local path = d.path:sub(1, #d.path - #suffix)
+    local commit = changes[1] and changes[1].commit
+    local ncoms = Comments.count_under_path(comments, path, function(c)
+      return c.commit == commit
+    end)
     return nfiles, ncoms
   end
 
@@ -574,12 +588,14 @@ local function render_comment_list(state)
   local lines, row_map = {}, {}
   if #comments == 0 then
     lines[#lines + 1] = { { "  No comments yet.", "dim" } }
-    lines[#lines + 1] = { { "  Press c on a diff line.", "dim" } }
+    lines[#lines + 1] = { { "  Press c on a path or diff line.", "dim" } }
   end
   for i, c in ipairs(comments) do
-    local ln = c.anchor == "old" and c.old_start or c.new_start
-    local name = c.file:match("([^/]+)$") or c.file
-    local loc = name .. ":" .. tostring(ln or "?")
+    local kind = Comments.kind(c)
+    local loc = Comments.location(c)
+    if kind ~= "line" then
+      loc = (kind == "dir" and "Dir " or "File ") .. loc
+    end
     if c.commit then
       loc = loc .. " @" .. c.commit
     end
@@ -782,7 +798,7 @@ local function render_comment_detail(state)
     where = where .. "  ·  commit " .. c.commit
   end
   lines[#lines + 1] = { { "", "" } }
-  lines[#lines + 1] = { { " " .. c.file, "accent" } }
+  lines[#lines + 1] = { { " " .. Comments.path(c), "accent" } }
   lines[#lines + 1] = { { " " .. where, "dim" } }
   lines[#lines + 1] = { { "", "" } }
   local cbg = tint.com
@@ -796,7 +812,7 @@ local function render_comment_detail(state)
     lines[#lines + 1] = spans
   end
   lines[#lines + 1] = { { "", "" } }
-  for sl in (c.snippet .. "\n"):gmatch("(.-)\n") do
+  for sl in ((Comments.kind(c) == "line" and c.snippet or "") .. "\n"):gmatch("(.-)\n") do
     local ch1 = sl:sub(1, 1)
     local style = "item"
     if sl:match("^@@") then
@@ -854,7 +870,18 @@ local function redraw(state)
 
   -- Right pane: driven by the panel that last had focus (state.src).
   local drow_map, editor_row = {}, nil
-  if state.src == "commits" and not state.commit then
+  if state.centry and state.centry.path_editor then
+    local lines = {
+      { { " " .. state.centry.label .. ": " .. Comments.location(state.centry.record), "accent" } },
+      { { " Enter: save  Esc: cancel", "dim" } },
+    }
+    local rendered = state.centry.input:render(" │ ", 3, math.max(state.rwidth - 6, 20))
+    for _, line in ipairs(rendered.lines) do
+      lines[#lines + 1] = line
+      editor_row = #lines
+    end
+    state.rbuf:set_lines(lines)
+  elseif state.src == "commits" and not state.commit then
     render_commit_info(state)
   elseif state.src == "comments" then
     render_comment_detail(state)
@@ -884,6 +911,7 @@ local function redraw(state)
   panel_cfg(state.fwin, " [1] Files (" .. #state.wchanges .. ") ", state.pane == "files" and not state.centry, {
     { "Enter", "diff" },
     { "e", "edit" },
+    { "c", "comment" },
     { "s", "submit " .. #comments },
     { "Esc", "close" },
   })
@@ -891,7 +919,7 @@ local function redraw(state)
   local ctitle, cfooter
   if state.commit then
     ctitle = " [2] Commits: " .. state.commit.sha .. " (" .. #(state.commit_changes or {}) .. ") "
-    cfooter = { { "Enter", "diff" }, { "Esc", "back" } }
+    cfooter = { { "Enter", "diff" }, { "c", "comment" }, { "Esc", "back" } }
   else
     ctitle = " [2] Commits "
     cfooter = { { "Enter", "open" }, { "Esc", "close" } }
@@ -899,6 +927,7 @@ local function redraw(state)
   panel_cfg(state.cwin, ctitle, state.pane == "commits" and not state.centry, cfooter)
 
   panel_cfg(state.mwin, " [3] Comments (" .. #comments .. ") ", state.pane == "comments" and not state.centry, {
+    { "c", "edit" },
     { "d", "delete" },
     { "s", "submit " .. #comments },
   })
@@ -1238,6 +1267,43 @@ end
 --- comment editing ---------------------------------------------------------
 
 local function open_comment_editor(state)
+  if state.pane ~= "diff" then
+    local record, existing_idx
+    if state.pane == "comments" then
+      existing_idx = state.mrow_map and state.mrow_map[state.mcursor]
+      record = comments[existing_idx]
+    elseif state.pane == "files" or (state.pane == "commits" and state.commit) then
+      local committed = state.pane == "commits"
+      local map = committed and state.crow_map or state.frow_map
+      local cursor = committed and state.ccursor or state.fcursor
+      local selected = map and map[cursor]
+      local changes = committed and state.commit_changes or state.wchanges
+      local change = type(selected) == "number" and changes[selected]
+      if type(selected) == "table" and selected.dir then
+        record = { target = { kind = "dir", path = selected.dir }, commit = committed and state.commit.sha or nil }
+      elseif change then
+        record = { target = { kind = "file", path = change.path }, commit = change.commit }
+      end
+    end
+    if not record then
+      maki.ui.flash("Select a file, directory, or comment first")
+      return
+    end
+    local input = TextInput.new()
+    if existing_idx then
+      input:insert_text(record.text)
+    end
+    state.centry = {
+      input = input,
+      record = record,
+      existing_idx = existing_idx,
+      label = line_range_label(record),
+      path_editor = true,
+    }
+    state.vstart = nil
+    redraw(state)
+    return
+  end
   local at = state.drow_map[state.dcursor]
   local dl = state.dlines and state.dlines[at]
   if not dl or dl.kind == "hunk" then
@@ -1255,13 +1321,14 @@ local function open_comment_editor(state)
 
   local input = TextInput.new()
   local existing, existing_idx = comment_at(state.change, state.dlines[to])
+  local record = existing or make_comment(state.change, state.dlines, from, to, "")
   local label
   if existing then
     input:insert_text(existing.text)
     label = line_range_label(existing)
     from, to = nil, nil -- editing keeps the original range
   else
-    label = line_range_label(make_comment(state.change, state.dlines, from, to, ""))
+    label = line_range_label(record)
   end
 
   state.centry = {
@@ -1271,6 +1338,7 @@ local function open_comment_editor(state)
     at = at,
     existing_idx = existing_idx,
     label = label,
+    record = record,
   }
   state.vstart = nil
   redraw(state)
@@ -1287,7 +1355,8 @@ local function save_comment(state)
   if e.existing_idx then
     comments[e.existing_idx].text = text
   else
-    (Comments and Comments.add or table.insert)(comments, make_comment(state.change, state.dlines, e.from, e.to, text))
+    e.record.text = text
+    Comments.add(comments, e.record)
   end
   redraw(state)
 end
@@ -1499,7 +1568,9 @@ local function open_review()
     elseif key == "q" or key == "<C-c>" then
       break
     elseif state.pane ~= "diff" then -- one of the left panels
-      if key == "<CR>" or key == "l" or key == "<Right>" then
+      if key == "c" then
+        open_comment_editor(state)
+      elseif key == "<CR>" or key == "l" or key == "<Right>" then
         if state.pane == "commits" and not state.commit then
           enter_commit(state)
         elseif state.pane == "comments" then
