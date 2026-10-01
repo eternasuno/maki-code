@@ -37,7 +37,6 @@ function M.build_tree(changes)
   return root
 end
 
-
 function M.toggle_dir(collapsed, path)
   collapsed[path] = not collapsed[path] and true or nil
   return collapsed[path]

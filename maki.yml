@@ -1,0 +1,31 @@
+base: lua52
+lua_versions:
+  - luau
+
+globals:
+  assert:
+    args:
+      - type: any
+      - type: string
+        required: false
+      - type: "..."
+        required: false
+  maki:
+    any: true
+    property: full-write
+  load:
+    args:
+      - type: any
+      - type: string
+        required: false
+      - type: string
+        required: false
+      - type: table
+        required: false
+  utf8.offset:
+    args:
+      - type: string
+      - type: number
+      - type: number
+        required: false
+    must_use: true

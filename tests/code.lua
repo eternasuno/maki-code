@@ -9,38 +9,73 @@ local function contains(text, part)
 end
 local function test(name, fn)
   local ok, err = pcall(fn)
-  if ok then passed = passed + 1 else failed = failed + 1 end
+  if ok then
+    passed = passed + 1
+  else
+    failed = failed + 1
+  end
   print((ok and "PASS " or "FAIL ") .. name .. (ok and "" or ": " .. tostring(err)))
 end
 local function fixture(paths, sources)
-  local f = { paths = paths or { "a.lua" }, sources = sources or {}, queue = {}, windows = {}, flashes = {}, sessions = {}, commands = {}, registrations = {}, size = { cols = 120, rows = 30 }, autocmds = 0 }
+  local f = {
+    paths = paths or { "a.lua" },
+    sources = sources or {},
+    queue = {},
+    windows = {},
+    flashes = {},
+    sessions = {},
+    commands = {},
+    registrations = {},
+    size = { cols = 120, rows = 30 },
+    autocmds = 0,
+  }
   local numbered = {}
-  for i = 1, 90 do numbered[i] = "source " .. i end
+  for i = 1, 90 do
+    numbered[i] = "source " .. i
+  end
   f.sources["a.lua"] = f.sources["a.lua"] or table.concat(numbered, "\n")
   local function plain(lines)
     local result = {}
     for _, line in ipairs(lines or {}) do
       local spans = {}
-      for _, span in ipairs(line) do spans[#spans + 1] = span[1] end
+      for _, span in ipairs(line) do
+        spans[#spans + 1] = span[1]
+      end
       result[#result + 1] = table.concat(spans)
     end
     return table.concat(result, "\n")
   end
   function f:win(title)
     for i = #self.windows, 1, -1 do
-      if self.windows[i].opts.title == " " .. title .. " " then return self.windows[i] end
+      if self.windows[i].opts.title == " " .. title .. " " then
+        return self.windows[i]
+      end
     end
   end
-  function f:text(title) return plain(self:win(title).buf.content) end
-  function f:at(title) return plain({ self:win(title).buf.content[self:win(title).cursor] }) end
-  function f:check(fn) self.queue[#self.queue + 1] = fn end
-  function f:key(key) self.queue[#self.queue + 1] = { type = "key", key = key } end
-  function f:paste(text) self.queue[#self.queue + 1] = { type = "paste", text = text } end
+  function f:text(title)
+    return plain(self:win(title).buf.content)
+  end
+  function f:at(title)
+    return plain({ self:win(title).buf.content[self:win(title).cursor] })
+  end
+  function f:check(fn)
+    self.queue[#self.queue + 1] = fn
+  end
+  function f:key(key)
+    self.queue[#self.queue + 1] = { type = "key", key = key }
+  end
+  function f:paste(text)
+    self.queue[#self.queue + 1] = { type = "paste", text = text }
+  end
   function f:run()
     self.commands["/code"].handler()
     eq(#self.queue, 0)
-    for _, win in ipairs(self.windows) do assert(win.closed, "Window leaked") end
-    for _, flash in ipairs(self.flashes) do assert(not flash:find("Code browser error:", 1, true), flash) end
+    for _, win in ipairs(self.windows) do
+      assert(win.closed, "Window leaked")
+    end
+    for _, flash in ipairs(self.flashes) do
+      assert(not flash:find("Code browser error:", 1, true), flash)
+    end
   end
   maki = {
     api = {
@@ -48,7 +83,9 @@ local function fixture(paths, sources)
         f.registrations[spec.name] = (f.registrations[spec.name] or 0) + 1
         f.commands[spec.name] = spec
       end,
-      create_autocmd = function() f.autocmds = f.autocmds + 1 end,
+      create_autocmd = function()
+        f.autocmds = f.autocmds + 1
+      end,
     },
     fn = {
       jobstart = function(cmd)
@@ -56,49 +93,90 @@ local function fixture(paths, sources)
         return 1
       end,
       jobwait = function()
-        if f.git_error then return { exit_code = 1, stderr = f.git_error } end
-        return { exit_code = 0, stdout = f.last_command:find("rev-parse", 1, true) and "true\n" or table.concat(f.paths, "\0") .. "\0" }
+        if f.git_error then
+          return { exit_code = 1, stderr = f.git_error }
+        end
+        return {
+          exit_code = 0,
+          stdout = f.last_command:find("rev-parse", 1, true) and "true\n" or table.concat(f.paths, "\0") .. "\0",
+        }
       end,
     },
     fs = {
       metadata = function(path)
         eq(path:sub(1, 2), "./")
         path = path:sub(3)
-        if f.meta_error then error(f.meta_error) end
-        if f.missing == path then return nil, "File no longer exists" end
+        if f.meta_error then
+          error(f.meta_error)
+        end
+        if f.missing == path then
+          return nil, "File no longer exists"
+        end
         return { is_file = not f.directory, size = f.large and 1048577 or #(f.sources[path] or "") }
       end,
       read = function(path)
         f.reads = (f.reads or 0) + 1
-        if f.read_error then error(f.read_error) end
+        if f.read_error then
+          error(f.read_error)
+        end
         return f.sources[path:sub(3)] or ""
       end,
     },
-    session = { new = function(opts)
-      f.sessions[#f.sessions + 1] = opts
-      if f.submit_throw then error("session panic") end
-      if f.submit_fail then return nil, "session unavailable" end
-      return "new-session"
-    end },
+    session = {
+      new = function(opts)
+        f.sessions[#f.sessions + 1] = opts
+        if f.submit_throw then
+          error("session panic")
+        end
+        if f.submit_fail then
+          return nil, "session unavailable"
+        end
+        return "new-session"
+      end,
+    },
     ui = {
-      terminal_size = function() return { cols = f.size.cols, rows = f.size.rows } end,
-      theme_color = function() return "#202020" end,
-      highlight = function() return nil end,
-      flash = function(text) f.flashes[#f.flashes + 1] = text end,
+      terminal_size = function()
+        return { cols = f.size.cols, rows = f.size.rows }
+      end,
+      theme_color = function()
+        return "#202020"
+      end,
+      highlight = function()
+        return nil
+      end,
+      flash = function(text)
+        f.flashes[#f.flashes + 1] = text
+      end,
       buf = function()
-        return { content = {}, set_lines = function(self, lines) self.content = lines end }
+        return {
+          content = {},
+          set_lines = function(self, lines)
+            self.content = lines
+          end,
+        }
       end,
       open_win = function(buf, opts)
-        if f.open_error and #f.windows == 1 then error("window unavailable") end
+        if f.open_error and #f.windows == 1 then
+          error("window unavailable")
+        end
         local win = { buf = buf, opts = opts }
-        function win:set_cursor(row) self.cursor = row end
-         function win:set_config(config) self.config = config end
-        function win:close() self.closed = true end
+        function win:set_cursor(row)
+          self.cursor = row
+        end
+        function win:set_config(config)
+          self.config = config
+        end
+        function win:close()
+          self.closed = true
+        end
         function win:recv()
           while true do
             local event = table.remove(f.queue, 1)
-            if type(event) == "function" then event(f)
-            else return event end
+            if type(event) == "function" then
+              event(f)
+            else
+              return event
+            end
           end
         end
         f.windows[#f.windows + 1] = win
@@ -107,21 +185,31 @@ local function fixture(paths, sources)
     },
   }
   package.preload["maki.text_input"] = function()
-    return { new = function()
-      return {
-        text = "",
-        insert_text = function(self, text) self.text = self.text .. text end,
-        value = function(self) return self.text end,
-        handle_key = function(self, key)
-          if key == "<BS>" then self.text = self.text:sub(1, -2)
-          elseif key == "<C-u>" then self.text = ""
-          elseif #key == 1 then self.text = self.text .. key end
-        end,
-        render = function(self, prefix)
-          return { lines = { { { prefix .. self.text, "item" } } }, cursor_row = 1 }
-        end,
-      }
-    end }
+    return {
+      new = function()
+        return {
+          text = "",
+          insert_text = function(self, text)
+            self.text = self.text .. text
+          end,
+          value = function(self)
+            return self.text
+          end,
+          handle_key = function(self, key)
+            if key == "<BS>" then
+              self.text = self.text:sub(1, -2)
+            elseif key == "<C-u>" then
+              self.text = ""
+            elseif #key == 1 then
+              self.text = self.text .. key
+            end
+          end,
+          render = function(self, prefix)
+            return { lines = { { { prefix .. self.text, "item" } } }, cursor_row = 1 }
+          end,
+        }
+      end,
+    }
   end
   package.loaded["code"] = nil
   package.loaded["maki.text_input"] = nil
@@ -164,11 +252,17 @@ test("project listing deduplicates sorts and compresses directories", function()
   end)
   f:key("g")
   f:key("h")
-  f:check(function() assert(not f:text("Files"):find("b.lua", 1, true)) end)
+  f:check(function()
+    assert(not f:text("Files"):find("b.lua", 1, true))
+  end)
   f:key("l")
-  f:check(function() contains(f:text("Files"), "b.lua") end)
+  f:check(function()
+    contains(f:text("Files"), "b.lua")
+  end)
   f:key("G")
-  f:check(function() contains(f:at("Files"), "z.lua") end)
+  f:check(function()
+    contains(f:at("Files"), "z.lua")
+  end)
   f:key("q")
   f:run()
 end)
@@ -181,17 +275,27 @@ test("file paging selection and refresh listing", function()
   end
   local f = fixture(paths, sources)
   f:key("<PageDown>")
-  f:check(function() contains(f:at("Files"), "14.lua"); contains(f:text("Source"), "contents 14") end)
+  f:check(function()
+    contains(f:at("Files"), "14.lua")
+    contains(f:text("Source"), "contents 14")
+  end)
   f:key("<PageUp>")
   f:key("<Down>")
   f:key("<Up>")
   f:key("G")
   f:key("<CR>")
-  f:check(function() contains(f:text("Source"), "contents 30") end)
+  f:check(function()
+    contains(f:text("Source"), "contents 30")
+  end)
   f:key("h")
-  f:check(function() f.paths[#f.paths + 1] = "31.lua" end)
+  f:check(function()
+    f.paths[#f.paths + 1] = "31.lua"
+  end)
   f:key("r")
-  f:check(function() contains(f:at("Files"), "30.lua"); contains(f:text("Files"), "31.lua") end)
+  f:check(function()
+    contains(f:at("Files"), "30.lua")
+    contains(f:text("Files"), "31.lua")
+  end)
   f:key("q")
   f:run()
 end)
@@ -199,19 +303,29 @@ end)
 test("source selection arrows pages endpoints and pane return", function()
   local f = fixture()
   f:key("<CR>")
-  f:check(function() contains(f:at("Source"), "source 1") end)
+  f:check(function()
+    contains(f:at("Source"), "source 1")
+  end)
   f:key("j")
   f:key("<Down>")
   f:key("k")
-  f:check(function() contains(f:at("Source"), "source 2") end)
+  f:check(function()
+    contains(f:at("Source"), "source 2")
+  end)
   f:key("<PageDown>")
-  f:check(function() contains(f:at("Source"), "source 25") end)
+  f:check(function()
+    contains(f:at("Source"), "source 25")
+  end)
   f:key("<PageUp>")
   f:key("G")
-  f:check(function() contains(f:at("Source"), "source 90") end)
+  f:check(function()
+    contains(f:at("Source"), "source 90")
+  end)
   f:key("g")
   f:key("<Up>")
-  f:check(function() contains(f:at("Source"), "source 1") end)
+  f:check(function()
+    contains(f:at("Source"), "source 1")
+  end)
   f:key("h")
   f:key("<Right>")
   f:key("<Esc>")
@@ -223,12 +337,17 @@ test("single range edit cancel blank and delete comments", function()
   local f = fixture()
   f:key("<CR>")
   comment(f, "  single  ")
-  f:check(function() contains(f:text("Comments"), "a.lua:1 single") end)
+  f:check(function()
+    contains(f:text("Comments"), "a.lua:1 single")
+  end)
   f:key("c")
   f:key("<C-u>")
   f:paste("edited")
   f:key("<CR>")
-  f:check(function() contains(f:text("Comments"), "edited"); assert(not f:text("Comments"):find("single", 1, true)) end)
+  f:check(function()
+    contains(f:text("Comments"), "edited")
+    assert(not f:text("Comments"):find("single", 1, true))
+  end)
   f:key("c")
   f:paste("cancelled")
   f:key("<Esc>")
@@ -237,14 +356,22 @@ test("single range edit cancel blank and delete comments", function()
   f:key("j")
   f:key("j")
   comment(f, "range")
-  f:check(function() contains(f:text("Comments"), "a.lua:2-4 range"); contains(f:text("Source"), "Comment 2-4") end)
+  f:check(function()
+    contains(f:text("Comments"), "a.lua:2-4 range")
+    contains(f:text("Source"), "Comment 2-4")
+  end)
   f:key("d")
   f:key("G")
   comment(f, "   ")
-  f:check(function() assert(not f:text("Comments"):find("range", 1, true)); assert(not f:text("Comments"):find("90-90", 1, true)) end)
+  f:check(function()
+    assert(not f:text("Comments"):find("range", 1, true))
+    assert(not f:text("Comments"):find("90-90", 1, true))
+  end)
   f:key("g")
   f:key("d")
-  f:check(function() eq(f:text("Comments"), "No comments") end)
+  f:check(function()
+    eq(f:text("Comments"), "No comments")
+  end)
   f:key("q")
   f:run()
 end)
@@ -258,14 +385,18 @@ test("comments Tab navigation jump edit and deletion", function()
   f:key("<Tab>")
   f:key("<Tab>")
   f:key("j")
-  f:check(function() contains(f:at("Comments"), "last") end)
+  f:check(function()
+    contains(f:at("Comments"), "last")
+  end)
   f:key("k")
   f:key("G")
   f:key("g")
   f:key("<PageDown>")
   f:key("<PageUp>")
   f:key("<CR>")
-  f:check(function() contains(f:at("Source"), "source 1") end)
+  f:check(function()
+    contains(f:at("Source"), "source 1")
+  end)
   f:key("<Tab>")
   f:key("<Tab>")
   f:key("c")
@@ -275,7 +406,10 @@ test("comments Tab navigation jump edit and deletion", function()
   f:key("<Tab>")
   f:key("<Tab>")
   f:key("d")
-  f:check(function() assert(not f:text("Comments"):find("via comments", 1, true)); contains(f:text("Comments"), "last") end)
+  f:check(function()
+    assert(not f:text("Comments"):find("via comments", 1, true))
+    contains(f:text("Comments"), "last")
+  end)
   f:key("q")
   f:run()
 end)
@@ -283,7 +417,10 @@ end)
 test("no-comment submit exact flash and remains open", function()
   local f = fixture()
   f:key("s")
-  f:check(function() eq(f.flashes[1], "No comments to submit"); eq(#f.sessions, 0) end)
+  f:check(function()
+    eq(f.flashes[1], "No comments to submit")
+    eq(#f.sessions, 0)
+  end)
   f:key("q")
   f:run()
 end)
@@ -302,7 +439,9 @@ test("focused successful submit snapshots and clears reopened comments", functio
   contains(prompt, "may be stale; verify the current contents and line locations.")
   contains(prompt, "File: a.lua\nLines: 2-2\nComment: fix this")
   contains(prompt, "Context snapshot (may be stale):\n1: source 1\n2: source 2\n3: source 3\n4: source 4")
-  f:check(function() eq(f:text("Comments"), "No comments") end)
+  f:check(function()
+    eq(f:text("Comments"), "No comments")
+  end)
   f:key("q")
   f:run()
 end)
@@ -314,10 +453,15 @@ for _, mode in ipairs({ "submit_fail", "submit_throw" }) do
     f:key("<CR>")
     comment(f, "retain")
     f:key("s")
-    f:check(function() contains(f.flashes[#f.flashes], "Failed to start session:"); contains(f:text("Comments"), "retain") end)
+    f:check(function()
+      contains(f.flashes[#f.flashes], "Failed to start session:")
+      contains(f:text("Comments"), "retain")
+    end)
     f:key("q")
     f:run()
-    f:check(function() contains(f:text("Comments"), "retain") end)
+    f:check(function()
+      contains(f:text("Comments"), "retain")
+    end)
     f:key("q")
     f:run()
   end)
@@ -327,35 +471,101 @@ test("refresh current contents and deleted file preserves comments", function()
   local f = fixture()
   f:key("<CR>")
   comment(f, "persistent")
-  f:check(function() f.sources["a.lua"] = "changed\nsecond" end)
+  f:check(function()
+    f.sources["a.lua"] = "changed\nsecond"
+  end)
   f:key("r")
-  f:check(function() contains(f:text("Source"), "changed"); contains(f:text("Comments"), "persistent"); f.paths = {}; f.missing = "a.lua" end)
+  f:check(function()
+    contains(f:text("Source"), "changed")
+    contains(f:text("Comments"), "persistent")
+    f.paths = {}
+    f.missing = "a.lua"
+  end)
   f:key("r")
-  f:check(function() contains(f:text("Source"), "File no longer exists"); contains(f:text("Comments"), "persistent"); eq(f:text("Files"), "No files") end)
+  f:check(function()
+    contains(f:text("Source"), "File no longer exists")
+    contains(f:text("Comments"), "persistent")
+    eq(f:text("Files"), "No files")
+  end)
   f:key("s")
   f:run()
   contains(f.sessions[1].prompt, "1: source 1")
 end)
 
 local errors = {
-  { "binary", function(f) f.sources["a.lua"] = "a\0b" end, "Binary or control-character" },
-  { "invalid UTF-8", function(f) f.sources["a.lua"] = "a\255b" end, "Invalid UTF-8 source" },
-  { "large metadata", function(f) f.large = true end, "File exceeds 1 MiB" },
-  { "large read", function(f) f.sources["a.lua"] = string.rep("x", 1048577); maki.fs.metadata = function() return { is_file = true, size = 1 } end end, "File exceeds 1 MiB" },
-  { "missing", function(f) f.missing = "a.lua" end, "File no longer exists" },
-  { "directory", function(f) f.directory = true end, "Not a regular file" },
-  { "read exception", function(f) f.read_error = "invalid encoding" end, "Cannot read source" },
-  { "metadata exception", function(f) f.meta_error = "metadata denied" end, "metadata denied" },
+  {
+    "binary",
+    function(f)
+      f.sources["a.lua"] = "a\0b"
+    end,
+    "Binary or control-character",
+  },
+  {
+    "invalid UTF-8",
+    function(f)
+      f.sources["a.lua"] = "a\255b"
+    end,
+    "Invalid UTF-8 source",
+  },
+  {
+    "large metadata",
+    function(f)
+      f.large = true
+    end,
+    "File exceeds 1 MiB",
+  },
+  {
+    "large read",
+    function(f)
+      f.sources["a.lua"] = string.rep("x", 1048577)
+      maki.fs.metadata = function()
+        return { is_file = true, size = 1 }
+      end
+    end,
+    "File exceeds 1 MiB",
+  },
+  {
+    "missing",
+    function(f)
+      f.missing = "a.lua"
+    end,
+    "File no longer exists",
+  },
+  {
+    "directory",
+    function(f)
+      f.directory = true
+    end,
+    "Not a regular file",
+  },
+  {
+    "read exception",
+    function(f)
+      f.read_error = "invalid encoding"
+    end,
+    "Cannot read source",
+  },
+  {
+    "metadata exception",
+    function(f)
+      f.meta_error = "metadata denied"
+    end,
+    "metadata denied",
+  },
 }
 for _, case in ipairs(errors) do
   test("source safety " .. case[1], function()
     local f = fixture()
     case[2](f)
-    f:check(function() contains(f:text("Source"), case[3]) end)
+    f:check(function()
+      contains(f:text("Source"), case[3])
+    end)
     f:key("<CR>")
     f:key("c")
     f:paste("cannot save")
-    f:check(function() eq(f:text("Comments"), "No comments") end)
+    f:check(function()
+      eq(f:text("Comments"), "No comments")
+    end)
     f:key("q")
     f:run()
   end)
@@ -365,7 +575,11 @@ test("line display limit and CRLF", function()
   local f = fixture(nil, { ["a.lua"] = string.rep("line\r\n", 10001) })
   f:key("<CR>")
   f:key("G")
-  f:check(function() contains(f:at("Source"), "10000 line"); contains(f:text("Source"), "Showing first 10000 lines"); assert(not f:text("Source"):find("\r", 1, true)) end)
+  f:check(function()
+    contains(f:at("Source"), "10000 line")
+    contains(f:text("Source"), "Showing first 10000 lines")
+    assert(not f:text("Source"):find("\r", 1, true))
+  end)
   f:key("q")
   f:run()
 end)
@@ -375,9 +589,17 @@ test("resize recreates windows preserves editor and cleans up", function()
   f:key("<CR>")
   f:key("c")
   f:paste("resize retained")
-  f:check(function() f.size = { cols = 100, rows = 40 } end)
+  f:check(function()
+    f.size = { cols = 100, rows = 40 }
+  end)
   f.queue[#f.queue + 1] = { type = "resize" }
-  f:check(function() eq(#f.windows, 6); for i = 1, 3 do assert(f.windows[i].closed) end; contains(f:text("Source"), "resize retained") end)
+  f:check(function()
+    eq(#f.windows, 6)
+    for i = 1, 3 do
+      assert(f.windows[i].closed)
+    end
+    contains(f:text("Source"), "resize retained")
+  end)
   f:key("<CR>")
   f:key("q")
   f:run()
@@ -386,7 +608,9 @@ end)
 test("unchanged resize and close event cleanup", function()
   local f = fixture()
   f.queue[#f.queue + 1] = { type = "resize" }
-  f:check(function() eq(#f.windows, 3) end)
+  f:check(function()
+    eq(#f.windows, 3)
+  end)
   f.queue[#f.queue + 1] = { type = "close" }
   f:run()
 end)
@@ -403,10 +627,14 @@ end)
 
 test("event loop error closes all windows", function()
   local f = fixture()
-  f:check(function() error("event failure") end)
+  f:check(function()
+    error("event failure")
+  end)
   f.commands["/code"].handler()
   eq(#f.windows, 3)
-  for _, win in ipairs(f.windows) do assert(win.closed) end
+  for _, win in ipairs(f.windows) do
+    assert(win.closed)
+  end
   contains(f.flashes[#f.flashes], "Code browser error:")
   contains(f.flashes[#f.flashes], "event failure")
 end)

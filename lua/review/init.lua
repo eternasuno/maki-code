@@ -83,7 +83,9 @@ end
 --- git plumbing ------------------------------------------------------------
 
 local function comment_count(change)
-  if Comments.count_for_file(comments, change.path) == 0 then return 0 end
+  if Comments.count_for_file(comments, change.path) == 0 then
+    return 0
+  end
   local n = 0
   for _, c in ipairs(comments) do
     if c.file == change.path and c.commit == change.commit then
@@ -108,8 +110,7 @@ local function git_changes()
     if status then
       local path = rest:match("\t(.+)$") or rest -- renames: keep new path
       seen[path] = #changes + 1
-      changes[#changes + 1] =
-        { path = path, status = status:sub(1, 1), adds = 0, dels = 0 }
+      changes[#changes + 1] = { path = path, status = status:sub(1, 1), adds = 0, dels = 0 }
     end
   end
 
@@ -132,8 +133,7 @@ local function git_changes()
   local untracked = run("git ls-files --others --exclude-standard") or ""
   for path in untracked:gmatch("[^\n]+") do
     if not seen[path] then
-      changes[#changes + 1] =
-        { path = path, status = "?", adds = 0, dels = 0, untracked = true }
+      changes[#changes + 1] = { path = path, status = "?", adds = 0, dels = 0, untracked = true }
     end
   end
 
@@ -145,8 +145,7 @@ end
 
 -- Returns array of { sha, subject, when } or nil, err.
 local function git_log()
-  local out, err =
-    run("git log --no-color -n 200 --pretty=format:'%h%x09%s%x09%ar'")
+  local out, err = run("git log --no-color -n 200 --pretty=format:'%h%x09%s%x09%ar'")
   if not out then
     return nil, err
   end
@@ -163,8 +162,7 @@ end
 -- Files changed by one commit; same shape as git_changes, plus .commit.
 local function git_commit_changes(sha)
   local changes, seen = {}, {}
-  local ns, err =
-    run("git diff-tree -r --root --no-commit-id --name-status " .. sha)
+  local ns, err = run("git diff-tree -r --root --no-commit-id --name-status " .. sha)
   if not ns then
     return nil, err
   end
@@ -182,8 +180,7 @@ local function git_commit_changes(sha)
       }
     end
   end
-  local numstat =
-    run("git diff-tree -r --root --no-commit-id --numstat " .. sha) or ""
+  local numstat = run("git diff-tree -r --root --no-commit-id --numstat " .. sha) or ""
   for line in numstat:gmatch("[^\n]+") do
     local adds, dels, path = line:match("^(%S+)\t(%S+)\t(.+)$")
     if path then
@@ -250,17 +247,13 @@ end
 local function get_diff(change)
   local cmd
   if change.commit then
-    cmd = "git show --no-color --format= "
-      .. change.commit
-      .. " -- "
-      .. sh_quote(change.path)
+    cmd = "git show --no-color --format= " .. change.commit .. " -- " .. sh_quote(change.path)
   elseif change.untracked then
     cmd = "git diff --no-color --no-index -- /dev/null " .. sh_quote(change.path)
   else
     cmd = "git diff --no-color HEAD -- " .. sh_quote(change.path)
   end
-  local raw, err = run(cmd, change.untracked and not change.commit
-    and { ok_exit_codes = { 0, 1 } } or nil)
+  local raw, err = run(cmd, change.untracked and not change.commit and { ok_exit_codes = { 0, 1 } } or nil)
   if not raw then
     return nil, err
   end
@@ -280,7 +273,9 @@ local function highlight_dlines(path, dlines)
     end
   end
   local styled = Highlight.highlight_file(path, code)
-  if not styled then return nil end
+  if not styled then
+    return nil
+  end
   local hl = {}
   for j, spans in ipairs(styled) do
     hl[idxs[j]] = spans
@@ -376,7 +371,7 @@ local function build_prompt()
     "Address every comment: apply the requested fix directly on the current working tree.",
     "If a comment is a question, answer it and apply any change the answer implies.",
     "Line numbers refer to the file content on the commented side of the diff",
-    "(\"removed\" lines refer to the pre-change file).",
+    '("removed" lines refer to the pre-change file).',
     "",
   }
   for _, file in ipairs(order) do
@@ -427,8 +422,7 @@ end
 
 --- rendering ---------------------------------------------------------------
 
-local STATUS_STYLE =
-  { M = "warning", A = "diff_new", D = "diff_old", R = "accent", ["?"] = "diff_new" }
+local STATUS_STYLE = { M = "warning", A = "diff_new", D = "diff_old", R = "accent", ["?"] = "diff_new" }
 
 -- Renders a change list as a collapsible directory tree into `buf`.
 -- row_map values: number (index into `changes`) or { dir = path }.
@@ -481,11 +475,7 @@ local function render_change_list(state, buf, changes, cursor, active, empty_msg
     end
     local badge = n > 0 and (COMMENT_MARK .. n .. " ") or ""
     local prefix = " " .. string.rep("  ", depth) .. ch.status .. " "
-    local avail = width
-      - display_len(prefix)
-      - display_len(right)
-      - display_len(badge)
-      - 2
+    local avail = width - display_len(prefix) - display_len(right) - display_len(badge) - 2
     local spans = {
       { prefix, STATUS_STYLE[ch.status] or "item" },
       { fit_path(f.name, math.max(avail, 8)), "item" },
@@ -507,11 +497,7 @@ local function render_change_list(state, buf, changes, cursor, active, empty_msg
     local right = isc and (nfiles .. " files") or ""
     local badge = ncoms > 0 and (COMMENT_MARK .. ncoms .. " ") or ""
     local prefix = " " .. string.rep("  ", depth) .. (isc and "▸ " or "▾ ")
-    local avail = width
-      - display_len(prefix)
-      - display_len(right)
-      - display_len(badge)
-      - 2
+    local avail = width - display_len(prefix) - display_len(right) - display_len(badge) - 2
     local spans = {
       { prefix, "accent" },
       { fit_path(d.name .. "/", math.max(avail, 8)), "item" },
@@ -565,7 +551,9 @@ local function render_commit_list(state)
       -- Ensure `cut` lands on a UTF-8 boundary
       while cut > 0 do
         local ok, pos = pcall(utf8.offset, subject, 0, cut + 1)
-        if ok and pos == cut + 1 then break end
+        if ok and pos == cut + 1 then
+          break
+        end
         cut = cut - 1
       end
       subject = subject:sub(1, cut) .. "…"
@@ -655,8 +643,7 @@ local function render_diff(state)
   local dlines = state.dlines
   if not dlines then
     lines[#lines + 1] = { { "", "" } }
-    lines[#lines + 1] =
-      { { "  " .. (state.diff_err or "No diff to show."), "dim" } }
+    lines[#lines + 1] = { { "  " .. (state.diff_err or "No diff to show."), "dim" } }
     state.rbuf:set_lines(lines)
     return row_map, nil
   end
@@ -685,9 +672,7 @@ local function render_diff(state)
     local c = comment_at(ch, dl)
     local ln = dl.kind == "del" and dl.old_ln or dl.new_ln
     local sign = dl.kind == "add" and "+" or dl.kind == "del" and "-" or " "
-    local base = dl.kind == "add" and "diff_new"
-      or dl.kind == "del" and "diff_old"
-      or "item"
+    local base = dl.kind == "add" and "diff_new" or dl.kind == "del" and "diff_old" or "item"
 
     -- Code text: syntax-highlighted spans when available.
     local text_spans
@@ -733,8 +718,7 @@ local function render_diff(state)
         { "Comment (" .. state.centry.label .. ")", "accent" },
         { "  Enter: save  Esc: cancel", "dim" },
       }
-      local r =
-        state.centry.input:render("    │ ", 6, math.max(width - 8, 20))
+      local r = state.centry.input:render("    │ ", 6, math.max(width - 8, 20))
       for _, l in ipairs(r.lines) do
         lines[#lines + 1] = l
         editor_row = #lines
@@ -860,15 +844,7 @@ end
 local function redraw(state)
   -- Left column: files, commits, comments (stacked).
   state.frow_map = render_clamped(state, function(s)
-    return render_change_list(
-      s,
-      s.fbuf,
-      s.wchanges,
-      s.fcursor,
-      s.pane == "files",
-      NO_CHANGES,
-      s.fcollapsed
-    )
+    return render_change_list(s, s.fbuf, s.wchanges, s.fcursor, s.pane == "files", NO_CHANGES, s.fcollapsed)
   end, "fcursor", state.fbuf)
 
   local crender = render_commit_list
@@ -887,8 +863,7 @@ local function redraw(state)
   end
   state.crow_map = render_clamped(state, crender, "ccursor", state.cbuf)
 
-  state.mrow_map =
-    render_clamped(state, render_comment_list, "mcursor", state.mbuf)
+  state.mrow_map = render_clamped(state, render_comment_list, "mcursor", state.mbuf)
 
   -- Right pane: driven by the panel that last had focus (state.src).
   local drow_map, editor_row = {}, nil
@@ -923,16 +898,11 @@ local function redraw(state)
     })
   end
 
-  panel_cfg(
-    state.fwin,
-    " Files (" .. #state.wchanges .. ") ",
-    state.pane == "files" and not state.centry,
-    {
-      { "Enter", "diff" },
-      { "s", "submit " .. #comments },
-      { "Esc", "close" },
-    }
-  )
+  panel_cfg(state.fwin, " Files (" .. #state.wchanges .. ") ", state.pane == "files" and not state.centry, {
+    { "Enter", "diff" },
+    { "s", "submit " .. #comments },
+    { "Esc", "close" },
+  })
 
   local ctitle, cfooter
   if state.commit then
@@ -942,27 +912,16 @@ local function redraw(state)
     ctitle = " Commits "
     cfooter = { { "Enter", "open" }, { "Esc", "close" } }
   end
-  panel_cfg(
-    state.cwin,
-    ctitle,
-    state.pane == "commits" and not state.centry,
-    cfooter
-  )
+  panel_cfg(state.cwin, ctitle, state.pane == "commits" and not state.centry, cfooter)
 
-  panel_cfg(
-    state.mwin,
-    " Comments (" .. #comments .. ") ",
-    state.pane == "comments" and not state.centry,
-    {
-      { "d", "delete" },
-      { "s", "submit " .. #comments },
-    }
-  )
+  panel_cfg(state.mwin, " Comments (" .. #comments .. ") ", state.pane == "comments" and not state.centry, {
+    { "d", "delete" },
+    { "s", "submit " .. #comments },
+  })
 
   local rtitle = " Diff "
   if state.src == "commits" and not state.commit then
-    rtitle = state.sel_commit and (" Commit " .. state.sel_commit.sha .. " ")
-      or " Commit "
+    rtitle = state.sel_commit and (" Commit " .. state.sel_commit.sha .. " ") or " Commit "
   elseif state.src == "comments" then
     rtitle = " Comment "
   elseif state.change then
@@ -977,15 +936,13 @@ local function redraw(state)
   state.rwin:set_config({
     title = rtitle,
     border = diff_active and "double" or "rounded",
-    footer = state.centry
-        and { { "Enter", "save" }, { "Esc", "cancel" } }
-      or (diff_active and {
-        { "c", "comment" },
-        { "v", state.vstart and "cancel select" or "select" },
-        { "d", "delete" },
-        { "s", "submit " .. #comments },
-        { "Esc", "back" },
-      } or { { "Enter", "diff" } }),
+    footer = state.centry and { { "Enter", "save" }, { "Esc", "cancel" } } or (diff_active and {
+      { "c", "comment" },
+      { "v", state.vstart and "cancel select" or "select" },
+      { "d", "delete" },
+      { "s", "submit " .. #comments },
+      { "Esc", "back" },
+    } or { { "Enter", "diff" } }),
   })
 
   state.fwin:set_cursor(state.fcursor)
@@ -1014,8 +971,7 @@ local function load_preview(state)
     local cm = state.commits[state.crow_map and state.crow_map[state.ccursor]]
     state.sel_commit = cm
     if cm and not state.cache["info:" .. cm.sha] then
-      state.cache["info:" .. cm.sha] =
-        run("git show --no-color --format=medium --stat " .. cm.sha) or ""
+      state.cache["info:" .. cm.sha] = run("git show --no-color --format=medium --stat " .. cm.sha) or ""
     end
     return
   end
@@ -1073,8 +1029,7 @@ local function refresh(state)
   state.wchanges = git_changes() or state.wchanges
   state.commits = git_log() or state.commits
   if state.commit then
-    state.commit_changes =
-      git_commit_changes(state.commit.sha) or state.commit_changes
+    state.commit_changes = git_commit_changes(state.commit.sha) or state.commit_changes
   end
   redraw(state) -- rebuild row maps before reloading the preview
   load_preview(state)
@@ -1294,8 +1249,7 @@ local function save_comment(state)
   if e.existing_idx then
     comments[e.existing_idx].text = text
   else
-    (Comments and Comments.add or table.insert)(comments,
-      make_comment(state.change, state.dlines, e.from, e.to, text))
+    (Comments and Comments.add or table.insert)(comments, make_comment(state.change, state.dlines, e.from, e.to, text))
   end
   redraw(state)
 end
@@ -1517,8 +1471,7 @@ local function open_review()
       elseif key == "h" or key == "<Left>" then
         local cursor, row_map = active_view(state)
         local sel = row_map[cursor]
-        local set = state.pane == "commits" and state.ccollapsed
-          or state.fcollapsed
+        local set = state.pane == "commits" and state.ccollapsed or state.fcollapsed
         if
           (state.pane == "files" or (state.pane == "commits" and state.commit))
           and type(sel) == "table"
@@ -1592,14 +1545,11 @@ function M.setup()
     handler = open_review_safe,
   })
 
-
   -- Nudge after each turn when the working tree changed.
   maki.api.create_autocmd("TurnEnd", {
     callback = function()
       maki.async.run(function()
-        local out = run(
-          "git diff --name-only HEAD 2>/dev/null; git ls-files --others --exclude-standard 2>/dev/null"
-        )
+        local out = run("git diff --name-only HEAD 2>/dev/null; git ls-files --others --exclude-standard 2>/dev/null")
         if not out then
           return
         end

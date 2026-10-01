@@ -21,8 +21,9 @@ local env = setmetatable({
     state.redraws = state.redraws + 1
   end,
 }, { __index = _G })
-local dispatch = assert(load(make_comment .. save_comment
-  .. "\nreturn function(state, ev)\n" .. dispatcher .. "\nend", path, "t", env))()
+local dispatch = assert(
+  load(make_comment .. save_comment .. "\nreturn function(state, ev)\n" .. dispatcher .. "\nend", path, "t", env)
+)()
 
 local function state(text, existing_idx, result)
   local input = { text = text, forwarded = {} }
@@ -38,7 +39,8 @@ local function state(text, existing_idx, result)
     change = { path = "example.lua", commit = "abc" },
     dlines = { { kind = "add", new_ln = 7, text = "new line" } },
     centry = { input = input, from = 1, to = 1, existing_idx = existing_idx },
-  }, input
+  },
+    input
 end
 
 local tests = 0
@@ -104,8 +106,24 @@ for _, key in ipairs({ "<Esc>", "<C-c>" }) do
   end
 end
 
-for _, key in ipairs({ "x", "q", "c", "<Space>", "<BS>", "<Del>", "<Left>", "<Right>",
-  "<Up>", "<Down>", "<Home>", "<End>", "<PageUp>", "<PageDown>", "<Tab>", "<C-a>" }) do
+for _, key in ipairs({
+  "x",
+  "q",
+  "c",
+  "<Space>",
+  "<BS>",
+  "<Del>",
+  "<Left>",
+  "<Right>",
+  "<Up>",
+  "<Down>",
+  "<Home>",
+  "<End>",
+  "<PageUp>",
+  "<PageDown>",
+  "<Tab>",
+  "<C-a>",
+}) do
   test(key .. " forwards unchanged", function()
     local current, input = state("draft")
     local entry = current.centry
@@ -125,9 +143,20 @@ end)
 
 test("navigation comparisons use canonical keys only", function()
   local navigation = extract('    if key == "<Up>" or key == "k" then', "  for _, w in ipairs")
-  for old, canonical in pairs({ enter = "<CR>", esc = "<Esc>", ["ctrl+c"] = "<C-c>",
-    up = "<Up>", down = "<Down>", pageup = "<PageUp>", pagedown = "<PageDown>",
-    home = "<Home>", ["end"] = "<End>", tab = "<Tab>", right = "<Right>", left = "<Left>" }) do
+  for old, canonical in pairs({
+    enter = "<CR>",
+    esc = "<Esc>",
+    ["ctrl+c"] = "<C-c>",
+    up = "<Up>",
+    down = "<Down>",
+    pageup = "<PageUp>",
+    pagedown = "<PageDown>",
+    home = "<Home>",
+    ["end"] = "<End>",
+    tab = "<Tab>",
+    right = "<Right>",
+    left = "<Left>",
+  }) do
     assert(not navigation:find('key == "' .. old .. '"', 1, true), "legacy key: " .. old)
     assert(navigation:find('key == "' .. canonical .. '"', 1, true), "missing key: " .. canonical)
   end
