@@ -258,17 +258,33 @@ local function selected(spans, width)
   return Layout.pad_spans(Layout.restyle(spans, "selected"), width, "selected")
 end
 
+local function flatten_tree(state)
+  local collapsed = {}
+  for _, row in ipairs(Tree.flatten(state.tree)) do
+    local path = row.dir
+    while path do
+      if state.collapsed[path] then
+        collapsed[row.dir] = true
+        break
+      end
+      path = path:match("^(.*)/[^/]+$")
+    end
+  end
+  state.effective_collapsed = collapsed
+  state.rows = Tree.flatten(state.tree, collapsed)
+end
+
 local function redraw(state)
-  state.rows = Tree.flatten(state.tree, state.collapsed)
+  flatten_tree(state)
   state.file_cursor = clamp(state.file_cursor, #state.rows)
   state.comment_cursor = clamp(state.comment_cursor, #store)
   local file_lines = {}
   for index, row in ipairs(state.rows) do
     local label = string.rep("  ", row.depth)
-      .. (row.dir and (state.collapsed[row.dir] and "▸ " or "▾ ") or "  ")
+      .. (row.dir and (state.effective_collapsed[row.dir] and "▸ " or "▾ ") or "  ")
       .. display(row.name)
     if row.idx then
-      local count = Comments.count_for_file(store, state.paths[row.idx])
+      local count = Comments.count_for_file(store, state.filtered_paths[row.idx])
       if count > 0 then
         label = label .. " ●" .. count
       end
@@ -385,13 +401,14 @@ local function redraw(state)
   local files_active = state.pane == "files" and not state.editor
   local comments_active = state.pane == "comments" and not state.editor
   local source_active = state.pane == "source" or state.editor ~= nil
+  local files_title = " [1] Files (" .. #state.filtered_paths .. ") "
+  if state.search_input or state.search_query ~= "" then
+    files_title = files_title .. "/" .. display(state.search_query) .. " "
+  end
+  local files_hints = state.search_input and { { "Enter", "keep" }, { "Esc", "clear" } }
+    or { { "/", "search" }, { "Enter", "open" }, { "e", "edit" }, { "r", "refresh" }, { "Esc", "clear/close" } }
   state.fwin:set_config(
-    Layout.panel_config(
-      state.panel_width,
-      " [1] Files (" .. #state.paths .. ") ",
-      files_active,
-      files_active and { { "Enter", "open" }, { "e", "edit" }, { "r", "refresh" } } or {}
-    )
+    Layout.panel_config(state.panel_width, files_title, files_active, files_active and files_hints or {})
   )
   state.mwin:set_config(
     Layout.panel_config(
@@ -423,10 +440,48 @@ end
 local function preview_selected(state)
   local row = state.rows[state.file_cursor]
   if row and row.idx then
-    local path = state.paths[row.idx]
+    local path = state.filtered_paths[row.idx]
     if path ~= state.file then
       load_source(state, path)
     end
+  end
+end
+
+local function index_paths(state, paths)
+  state.paths, state.search_entries = paths, {}
+  for _, path in ipairs(paths) do
+    state.search_entries[#state.search_entries + 1] = { path = path, name_lower = path:match("[^/]+$"):lower() }
+  end
+end
+
+local function apply_search(state, query, reload)
+  local selected_row = state.rows and state.rows[state.file_cursor]
+  local selected_path = selected_row and (selected_row.dir or state.filtered_paths[selected_row.idx])
+  state.search_query, state.filtered_paths = query, {}
+  local lower = query:lower()
+  for _, entry in ipairs(state.search_entries) do
+    if entry.name_lower:find(lower, 1, true) then
+      state.filtered_paths[#state.filtered_paths + 1] = entry.path
+    end
+  end
+  state.tree = Tree.build_tree(state.filtered_paths)
+  flatten_tree(state)
+  state.file_cursor = clamp(state.file_cursor, #state.rows)
+  for index, row in ipairs(state.rows) do
+    if (row.dir or state.filtered_paths[row.idx]) == selected_path then
+      state.file_cursor = index
+      break
+    end
+  end
+  local row = state.rows[state.file_cursor]
+  local path = row and row.idx and state.filtered_paths[row.idx]
+  if path then
+    if reload or path ~= state.file then
+      load_source(state, path, path == state.file and state.line or 1)
+    end
+  else
+    state.file, state.lines, state.syntax, state.error, state.truncated = nil, nil, nil, nil, nil
+    state.line, state.anchor, state.editor = 1, nil, nil
   end
 end
 
@@ -436,26 +491,20 @@ local function refresh(state)
     maki.ui.flash(tostring(err))
     return
   end
-  local selected_row = state.rows[state.file_cursor]
-  local selected_path = selected_row and (selected_row.dir or state.paths[selected_row.idx])
-  state.paths, state.tree = paths, Tree.build_tree(paths)
-  state.rows = Tree.flatten(state.tree, state.collapsed)
-  for index, row in ipairs(state.rows) do
-    if (row.dir or paths[row.idx]) == selected_path then
-      state.file_cursor = index
-      break
-    end
+  local file, line = state.file, state.line
+  index_paths(state, paths)
+  apply_search(state, state.search_query, state.pane == "files")
+  if state.pane ~= "files" and file then
+    load_source(state, file, line)
   end
-  if state.file then
-    load_source(state, state.file, state.line)
-  end
+  return true
 end
 
 local function edit_file(state)
   local target = state.file
   if state.pane == "files" then
     local row = state.rows[state.file_cursor]
-    target = row and row.idx and state.paths[row.idx]
+    target = row and row.idx and state.filtered_paths[row.idx]
     if not target then
       maki.ui.flash("Select a working-tree file to edit, not a directory")
       return
@@ -475,8 +524,10 @@ local function edit_file(state)
     return
   end
   local editor_ok, code = pcall(maki.ui.open_editor, path)
-  refresh(state)
-  load_source(state, target, state.file == target and state.line or 1)
+  local refreshed = refresh(state)
+  if not refreshed or state.pane ~= "files" then
+    load_source(state, target, state.file == target and state.line or 1)
+  end
   if not editor_ok then
     maki.ui.flash("Editor failed: " .. tostring(code))
   elseif code == -1 then
@@ -498,6 +549,22 @@ local function navigate(state, delta, endpoint)
 end
 
 local function handle_key(state, key)
+  if state.search_input then
+    if key == "<CR>" then
+      state.search_input = nil
+    elseif key == "<Esc>" or key == "<C-c>" then
+      state.search_input = nil
+      apply_search(state, "")
+    else
+      local before = state.search_input:value()
+      state.search_input:handle_key(key)
+      local query = state.search_input:value()
+      if query ~= before then
+        apply_search(state, query)
+      end
+    end
+    return false
+  end
   if state.editor then
     if key == "<CR>" then
       save_editor(state)
@@ -512,7 +579,10 @@ local function handle_key(state, key)
     or state.pane == "comments" and #store
     or state.lines and #state.lines
     or 1
-  if key == "q" or key == "<C-c>" then
+  if key == "/" and state.pane == "files" then
+    state.search_input = TextInput.new()
+    state.search_input:insert_text(state.search_query)
+  elseif key == "q" or key == "<C-c>" then
     return true
   elseif key == "s" then
     return submit(state, function()
@@ -539,7 +609,9 @@ local function handle_key(state, key)
   elseif key == "G" or key == "<End>" then
     navigate(state, 0, math.max(1, count))
   elseif key == "<Esc>" then
-    if state.anchor then
+    if state.pane == "files" and state.search_query ~= "" then
+      apply_search(state, "")
+    elseif state.anchor then
       state.anchor = nil
     elseif state.pane == "source" then
       state.pane = "files"
@@ -568,9 +640,21 @@ local function handle_key(state, key)
     if state.pane == "files" then
       local row = state.rows[state.file_cursor]
       if row and row.dir then
-        Tree.toggle_dir(state.collapsed, row.dir)
+        if state.effective_collapsed[row.dir] then
+          local path = row.dir
+          while path do
+            state.collapsed[path] = nil
+            path = path:match("^(.*)/[^/]+$")
+          end
+        else
+          state.collapsed[row.dir] = true
+        end
       elseif row and row.idx and key ~= "l" then
-        load_source(state, state.paths[row.idx], state.file == state.paths[row.idx] and state.line or 1)
+        load_source(
+          state,
+          state.filtered_paths[row.idx],
+          state.file == state.filtered_paths[row.idx] and state.line or 1
+        )
         state.pane = "source"
       end
     elseif state.pane == "comments" and key ~= "l" then
@@ -590,11 +674,11 @@ local function run_browser(state)
     maki.ui.flash(tostring(err))
     return
   end
-  state.paths, state.tree = paths, Tree.build_tree(paths)
+  index_paths(state, paths)
   state.pane, state.collapsed = "files", {}
   state.file_cursor, state.comment_cursor, state.line = 1, 1, 1
   state.fbuf, state.mbuf, state.sbuf = maki.ui.buf(), maki.ui.buf(), maki.ui.buf()
-  state.rows = Tree.flatten(state.tree, state.collapsed)
+  apply_search(state, "")
   for index, row in ipairs(state.rows) do
     if row.idx then
       state.file_cursor = index
@@ -613,6 +697,14 @@ local function run_browser(state)
       local size = maki.ui.terminal_size()
       if size.cols ~= state.term.cols or size.rows ~= state.term.rows then
         open_windows(state)
+      end
+      redraw(state)
+    elseif event.type == "paste" and state.search_input then
+      local before = state.search_input:value()
+      state.search_input:insert_text(display(event.text):gsub("[\r\n\t]+", " "))
+      local query = state.search_input:value()
+      if query ~= before then
+        apply_search(state, query)
       end
       redraw(state)
     elseif event.type == "paste" and state.editor then
