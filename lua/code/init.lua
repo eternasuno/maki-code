@@ -177,7 +177,7 @@ local function save_editor(state)
   state.editor = nil
 end
 
-local function submit()
+local function submit(state, restore)
   if #store == 0 then
     maki.ui.flash("No comments to submit")
     return false
@@ -195,9 +195,7 @@ local function submit()
       comment.snippet or ""
     )
   end
-  local ok, id, err = pcall(maki.session.new, { prompt = table.concat(prompt, "\n"), focus = true })
-  if not ok or not id or err then
-    maki.ui.flash("Failed to start session: " .. tostring(ok and (err or "No session returned") or id))
+  if not Utils.fill_input(state, { "swin", "mwin", "fwin" }, table.concat(prompt, "\n"), restore) then
     return false
   end
   store = {}
@@ -220,19 +218,21 @@ local function open_windows(state)
   local size = Layout.sizing()
   local fh = math.max(1, math.floor(size.h * 0.6))
   local mh = math.max(1, size.h - fh)
-  state.width, state.source_width = size.lw, size.rw
+  state.panel_width, state.panel_source_width = size.lw, size.rw
   state.heights = { files = fh, comments = mh, source = size.h }
-  state.swin = maki.ui.open_win(state.sbuf, {
-    title = " Source ",
+  state.swin = Layout.open_panel(state.sbuf, {
+    title = Utils.fit_path(" Source ", math.max(size.rw - 2, 0)),
+    border = "none",
     width = size.rw,
     height = size.h,
     row = size.row,
-    col = size.col + size.lw,
+    col = size.col + size.lw + size.gap,
     anchor = "NW",
     focus = false,
   })
-  state.mwin = maki.ui.open_win(state.mbuf, {
-    title = " Comments ",
+  state.mwin = Layout.open_panel(state.mbuf, {
+    title = Utils.fit_path(" Comments ", math.max(size.lw - 2, 0)),
+    border = "none",
     width = size.lw,
     height = mh,
     row = size.row + fh,
@@ -240,8 +240,9 @@ local function open_windows(state)
     anchor = "NW",
     focus = false,
   })
-  state.fwin = maki.ui.open_win(state.fbuf, {
-    title = " Files ",
+  state.fwin = Layout.open_panel(state.fbuf, {
+    title = Utils.fit_path(" Files ", math.max(size.lw - 2, 0)),
+    border = "none",
     width = size.lw,
     height = fh,
     row = size.row,
@@ -249,6 +250,7 @@ local function open_windows(state)
     anchor = "NW",
     focus = true,
   })
+  state.width, state.source_width = state.fwin.width, state.swin.width
   state.term = maki.ui.terminal_size()
 end
 
@@ -380,24 +382,42 @@ local function redraw(state)
   end
   state.sbuf:set_lines(source)
   state.swin:set_cursor(cursor)
-  state.fwin:set_config({
-    title = " [1] Files (" .. #state.paths .. ") ",
-    border = state.pane == "files" and "double" or "rounded",
-    footer = { { "Enter", "open" }, { "e", "edit" }, { "r", "refresh" } },
-  })
-  state.mwin:set_config({
-    title = " [2] Comments (" .. #store .. ") ",
-    border = state.pane == "comments" and "double" or "rounded",
-    footer = { { "Enter", "jump" }, { "d", "delete" }, { "s", "submit" } },
-  })
-  state.swin:set_config({
-    title = state.file
-        and (" [3] Source: " .. Utils.fit_path(display(state.file), math.max(1, state.source_width - 14)) .. " ")
-      or " [3] Source ",
-    border = state.pane == "source" and "double" or "rounded",
-    footer = state.editor and { { "Enter", "save" }, { "Esc", "cancel" } }
-      or { { "e", "edit" }, { "c", "comment" }, { "v", "select" }, { "s", "submit" }, { "Esc", "back" } },
-  })
+  local files_active = state.pane == "files" and not state.editor
+  local comments_active = state.pane == "comments" and not state.editor
+  local source_active = state.pane == "source" or state.editor ~= nil
+  state.fwin:set_config(
+    Layout.panel_config(
+      state.panel_width,
+      " [1] Files (" .. #state.paths .. ") ",
+      files_active,
+      files_active and { { "Enter", "open" }, { "e", "edit" }, { "r", "refresh" } } or {}
+    )
+  )
+  state.mwin:set_config(
+    Layout.panel_config(
+      state.panel_width,
+      " [2] Comments (" .. #store .. ") ",
+      comments_active,
+      comments_active and { { "Enter", "jump" }, { "d", "delete" }, { "s", "submit" } } or {}
+    )
+  )
+  local source_title = " [3] Source "
+  if state.file then
+    source_title = " [3] Source: " .. Utils.fit_path(display(state.file), math.max(0, state.source_width - 17))
+  end
+  state.swin:set_config(
+    Layout.panel_config(
+      state.panel_source_width,
+      source_title,
+      source_active,
+      state.editor and { { "Enter", "save" }, { "Esc", "cancel" } }
+        or (
+          source_active
+            and { { "e", "edit" }, { "c", "comment" }, { "v", "select" }, { "s", "submit" }, { "Esc", "back" } }
+          or {}
+        )
+    )
+  )
 end
 
 local function preview_selected(state)
@@ -495,7 +515,10 @@ local function handle_key(state, key)
   if key == "q" or key == "<C-c>" then
     return true
   elseif key == "s" then
-    return submit()
+    return submit(state, function()
+      open_windows(state)
+      redraw(state)
+    end)
   elseif key == "e" and (state.pane == "files" or state.pane == "source") then
     edit_file(state)
   elseif key == "r" then

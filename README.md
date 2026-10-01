@@ -4,8 +4,10 @@ Two independent Maki Lua plugins for reviewing code in the current workspace.
 
 ## Commands and layout
 
-- `/review` reviews Git changes relative to `HEAD` (staged, unstaged, and untracked) and recent commits. Its left column contains **Files**, **Commits**, and **Comments**; the right pane displays a syntax-highlighted diff, commit summary, or comment detail. The `TurnEnd` reminder flashes when changed files are detected.
+- `/review` reviews Git changes relative to `HEAD` (staged, unstaged, and untracked) and up to 200 recent commits. Its left column contains **Files**, **Commits**, and **Comments**; the right pane displays a syntax-highlighted diff, commit summary, or comment detail. The `TurnEnd` reminder flashes when a nonempty changed-file list differs from the last notified list.
 - `/code` browses workspace files, not just changes. Its left column contains **Files** and **Comments**; the right **Source** pane displays actual file contents with line numbers, syntax highlighting, cursor/range highlighting, comment markers, and inline comments.
+
+Both UIs use kanban-style single-line panel borders with a one-column gap between the file lists and Source/Diff. The active pane uses purple (`#bb9af7`); inactive panes use the theme’s dim foreground, without a `>` title marker. Since the native Maki window API lacks border colors, a fixed custom buffer frame surrounds each borderless content window. Titles and footer hints are fitted in display cells, keeping complete corners and preventing window widening from covering adjacent borders. Only the active pane shows footer hints, and hints that do not fit are omitted; all key bindings remain available.
 
 Both file trees are collapsible and compress single-directory chains such as `src/foo/bar/`. `/code` lists tracked and non-ignored untracked files using `git ls-files --cached --others --exclude-standard`, scoped to the current directory. It does not filter by extension: configuration and other text files are also available. Outside a Git working tree, it shows an explicit error.
 
@@ -27,8 +29,8 @@ Both file trees are collapsible and compress single-directory chains such as `sr
 | `c` | Add or edit a comment on the current source/diff line |
 | `v` | Toggle range selection; move to the other end, then press `c` |
 | `d` | Delete the current line's comment or the selected Comments entry |
-| `s` | Submit all comments from this plugin to a new focused Maki session |
-| `r` | Refresh; `/code` reloads both the file tree and selected source |
+| `s` | Fill the current Maki chat input with this plugin’s comments; review and send manually |
+| `r` | Refresh; `/code` reloads the file tree and selected source; `/review` accepts this in the left panes |
 | `q` / `Ctrl-C` | Quit (in the editor, `Ctrl-C` cancels instead) |
 
 In Files, `e` opens the selected existing regular file using `VISUAL`, falling back to `EDITOR`. In `/code` Source, it opens the displayed file independently of the Files selection, then refreshes its contents while keeping Source focused and preserving the current line (clamped if the file shrinks). Comments ignores `e`; in the inline comment editor it is ordinary text. Maki suspends the TUI and waits for the editor to exit, then reloads source/diffs even after a nonzero exit. Directories, missing files, and historical commit versions are not opened; editor failures are reported.
@@ -43,9 +45,11 @@ Stores are independent: `/review` uses old/new diff anchors; `/code` uses `{file
 
 Comments are **memory-only**. They survive closing and reopening the same plugin's UI, but disappear on `/reload` or process exit. They are never saved to disk. Refresh does not delete comments, including comments on files that have since disappeared.
 
-Submission opens a new **focused** Maki session. `/review` describes the diff/commit context. `/code` explicitly asks the agent to locate requests by file and line/range, read actual current files, and modify the workspace; saved snippets may be stale and must not be assumed current. Successful submission clears only the submitting plugin's comments and closes its UI. Failed submission retains them. `/code` without comments flashes `No comments to submit`.
+Submission only fills the **current chat input**: it never creates a session or sends automatically. Existing nonempty drafts are preserved, with two newlines before the appended prompt. `/review` describes the diff/commit context. `/code` explicitly asks the agent to locate requests by file and line/range, read actual current files, and modify the workspace; saved snippets may be stale and must not be assumed current. Successful submission clears only the submitting plugin's comments and closes its UI. Failed submission retains comments, restores the plugin windows and focus, and allows retrying. `/code` without comments flashes `No comments to submit`.
 
-Source reading gracefully reports missing, binary/control-character, or invalid UTF-8 files. Files larger than **1 MiB** are not opened; files with more than **10,000 lines** display the first 10,000 with a notice. Git listing errors and truncated subprocess output are reported rather than silently using a partial list.
+Before filling the input, the plugin closes its windows to release focus and briefly waits for the UI to process the close commands. If the input remains off screen, it retries a limited number of times. Switching sessions during this operation cancels the edit; failures retain comments and reopen the plugin UI.
+
+`/code` source reading reports missing, binary/control-character, or invalid UTF-8 files. Files larger than **1 MiB** are not opened; files with more than **10,000 lines** display the first 10,000 with a notice. `/code` reports Git listing errors and truncated subprocess output rather than using a partial list.
 
 ## Package layout
 
@@ -62,7 +66,7 @@ lua/
     ├── highlight.lua      Language inference and highlighting fallback
     ├── layout.lua         Sizing, spans, backgrounds, colors
     ├── shell.lua          Quoting and checked subprocess execution
-    └── utils.lua          Unicode, wrapping, path fitting
+    └── utils.lua          Unicode, wrapping, path fitting, chat input filling
 plugin.toml                Package permission request
 ```
 
@@ -70,7 +74,7 @@ Requiring either module alone registers nothing. Both `setup()` functions are id
 
 ## Installation and permissions
 
-Requires Git on `PATH`, a POSIX shell environment, and Maki's Lua UI, TextInput, filesystem, and session APIs. Start Maki in the project directory you want to browse.
+Requires Git on `PATH`, a POSIX shell environment, and Maki's Lua UI, TextInput, filesystem, and chat input APIs (`input` / `input_edit`). Start Maki in the project directory you want to browse.
 
 ### Managed package
 
@@ -107,21 +111,38 @@ require("review").setup()
 require("code").setup()
 ```
 
-Choose one installation method to avoid loading separate copies. The package requests `run` for Git subprocesses and `fs_read` for source metadata/content. It does not request filesystem write or network access; approve the requested permissions in Maki. Code modification after submission is performed by the new agent session under that session's permissions.
+Choose one installation method to avoid loading separate copies. The package requests `run` for Git subprocesses and `fs_read` for source metadata/content. It does not request filesystem write or network access; approve the requested permissions in Maki. Agent modification from comments begins only after you manually send the filled prompt, under the current session’s permissions. The `e` shortcut independently allows editing through your external editor.
 
 ## Verification
 
 From the repository root, using Lua 5.2 or later:
 
 ```sh
-lua tests/review_keys.lua
-lua tests/code.lua
-lua tests/common.lua
+just test-lua
 ```
 
-Tests exercise review editor regressions, complete code-module handlers with a mocked Maki host, setup idempotency, and shared primitives. The review setup test adapts Luau `continue` for standalone Lua without exercising those branches. These are not native terminal integration tests.
+This runs `tests/review_keys.lua`, `tests/code.lua`, and `tests/common.lua`. The Lua tests exercise editor and navigation regressions, mocked Maki handlers, setup idempotency, shared primitives, and input filling: draft preservation, queued window closure, edit failures, bounded retries, and session-switch guards. Review tests adapt Luau `continue` for standalone Lua without exercising those branches.
 
-Run `/reload` after installation. Manually check both commands, syntax colors, pane focus and scrolling, line/range comments, reopening retention, and focused-session submission. After an agent turn that changes files, check the `/review` reminder.
+The Rust harness follows the Maki repository’s default branch without a fixed `rev` in `Cargo.toml`; `Cargo.lock` records the resolved commit for reproducible runs. It tests package loading, registered commands, shared APIs, permissions, and Git fixtures:
+
+```sh
+just test
+```
+
+Neither suite validates real terminal rendering or the native chat-input submission flow; those require manual checks below.
+
+Additional development checks:
+
+```sh
+just check-fmt-lua
+just lint-lua
+just check
+just lint
+```
+
+`just fmt-lua` and `just fmt` format Lua/Luau and Rust respectively. See `AGENTS.md` for agent-facing development guidance.
+
+Run `/reload` after installation. Manually check both commands, syntax colors, pane focus and scrolling, line/range comments, reopening retention, and current-input filling, draft preservation, and failed-edit retry. After an agent turn that changes files, check the `/review` reminder.
 
 ## Acknowledgments
 

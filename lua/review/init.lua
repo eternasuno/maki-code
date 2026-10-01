@@ -10,7 +10,6 @@
 --   * Tab cycles the left panels; Enter/l focuses the diff, h/Esc goes back.
 --     In the diff: `c` comments the current line, `v` selects a range first,
 --     `d` deletes a comment.
---   * `s` submits all comments to a new focused maki session that fixes them.
 --
 -- After every turn, a status flash reminds you when files changed.
 --
@@ -33,7 +32,6 @@ local wrap = Utils.wrap
 local display_len = Utils.display_len
 local sanitize_utf8 = Utils.sanitize_utf8
 local fit_path = Utils.fit_path
-local spans_len = Layout.spans_len
 local pad_spans = Layout.pad_spans
 local restyle = Layout.restyle
 local with_bg = Layout.with_bg
@@ -396,27 +394,16 @@ local function build_prompt()
   return table.concat(p, "\n")
 end
 
-local function submit(state)
+local function submit(state, restore)
   if #comments == 0 then
     maki.ui.flash("No review comments yet — press c on a diff line first")
     return false
   end
-  local n = #comments
   local prompt = build_prompt()
-  local _, err = maki.session.new({ prompt = prompt, focus = true })
-  if err then
-    maki.ui.flash("Failed to start session: " .. err)
+  if not Utils.fill_input(state, { "rwin", "cwin", "mwin", "fwin" }, prompt, restore) then
     return false
   end
   comments = {}
-  if state then
-    for _, w in ipairs({ "fwin", "cwin", "mwin", "rwin" }) do
-      if state[w] then
-        state[w]:close()
-      end
-    end
-  end
-  maki.ui.flash("Sent " .. n .. " comment(s) to a new session")
   return true
 end
 
@@ -891,11 +878,7 @@ local function redraw(state)
   local diff_active = state.pane == "diff" or state.centry ~= nil
 
   local function panel_cfg(win, title, active, footer)
-    win:set_config({
-      title = title,
-      border = active and "double" or "rounded",
-      footer = not state.centry and active and footer or {},
-    })
+    win:set_config(Layout.panel_config(state.panel_lwidth, title, active, not state.centry and active and footer or {}))
   end
 
   panel_cfg(state.fwin, " [1] Files (" .. #state.wchanges .. ") ", state.pane == "files" and not state.centry, {
@@ -927,24 +910,38 @@ local function redraw(state)
     rtitle = " [4] Comment "
   elseif state.change then
     rtitle = " [4] Diff: "
-      .. fit_path(state.change.path, math.max(state.rwidth - 14, 12))
+      .. fit_path(
+        state.change.path,
+        math.max(
+          state.panel_rwidth - 18 - display_len(tostring(state.change.adds)) - display_len(tostring(state.change.dels)),
+          0
+        )
+      )
       .. "  +"
       .. state.change.adds
       .. " -"
       .. state.change.dels
       .. " "
   end
-  state.rwin:set_config({
-    title = rtitle,
-    border = diff_active and "double" or "rounded",
-    footer = state.centry and { { "Enter", "save" }, { "Esc", "cancel" } } or (diff_active and {
-      { "c", "comment" },
-      { "v", state.vstart and "cancel select" or "select" },
-      { "d", "delete" },
-      { "s", "submit " .. #comments },
-      { "Esc", "back" },
-    } or { { "Enter", "diff" } }),
-  })
+  state.rwin:set_config(
+    Layout.panel_config(
+      state.panel_rwidth,
+      rtitle,
+      diff_active,
+      state.centry and { { "Enter", "save" }, { "Esc", "cancel" } }
+        or (
+          diff_active
+            and {
+              { "c", "comment" },
+              { "v", state.vstart and "cancel select" or "select" },
+              { "d", "delete" },
+              { "s", "submit " .. #comments },
+              { "Esc", "back" },
+            }
+          or {}
+        )
+    )
+  )
 
   state.fwin:set_cursor(state.fcursor)
   state.cwin:set_cursor(state.ccursor)
@@ -1221,7 +1218,7 @@ local function move(state, dir, count)
 end
 
 local function jump(state, to_end)
-  local cursor, row_map, buf = active_view(state)
+  local _, row_map, buf = active_view(state)
   local best
   local from, to, step = 1, buf:len(), 1
   if to_end then
@@ -1315,12 +1312,13 @@ end
 local function layout()
   local base = Layout.sizing()
   local lw, rw, h, row, col = base.lw, base.rw, base.h, base.row, base.col
-  local fh = math.max(math.floor(h * 0.38), 5)
-  local ch = math.max(math.floor(h * 0.34), 5)
-  local mh = math.max(h - fh - ch, 4)
+  local fh = math.min(math.max(math.floor(h * 0.38), 5), math.max(h - 2, 1))
+  local ch = math.min(math.max(math.floor(h * 0.34), 5), math.max(h - fh - 1, 0))
+  local mh = h - fh - ch
   return {
     lw = lw,
     rw = rw,
+    gap = base.gap,
     h = h,
     fh = fh,
     ch = ch,
@@ -1339,17 +1337,19 @@ local function open_windows(state)
     end
   end
   local L = layout()
-  state.rwin = maki.ui.open_win(state.rbuf, {
-    title = " Diff ",
+  state.rwin = Layout.open_panel(state.rbuf, {
+    title = fit_path(" Diff ", math.max(L.rw - 2, 0)),
+    border = "none",
     width = L.rw,
     height = L.h,
     row = L.row,
-    col = L.col + L.lw,
+    col = L.col + L.lw + L.gap,
     anchor = "NW",
     focus = false,
   })
-  state.cwin = maki.ui.open_win(state.cbuf, {
-    title = " Commits ",
+  state.cwin = Layout.open_panel(state.cbuf, {
+    title = fit_path(" Commits ", math.max(L.lw - 2, 0)),
+    border = "none",
     width = L.lw,
     height = L.ch,
     row = L.row + L.fh,
@@ -1357,8 +1357,9 @@ local function open_windows(state)
     anchor = "NW",
     focus = false,
   })
-  state.mwin = maki.ui.open_win(state.mbuf, {
-    title = " Comments ",
+  state.mwin = Layout.open_panel(state.mbuf, {
+    title = fit_path(" Comments ", math.max(L.lw - 2, 0)),
+    border = "none",
     width = L.lw,
     height = L.mh,
     row = L.row + L.fh + L.ch,
@@ -1366,8 +1367,9 @@ local function open_windows(state)
     anchor = "NW",
     focus = false,
   })
-  state.fwin = maki.ui.open_win(state.fbuf, {
-    title = " Files ",
+  state.fwin = Layout.open_panel(state.fbuf, {
+    title = fit_path(" Files ", math.max(L.lw - 2, 0)),
+    border = "none",
     width = L.lw,
     height = L.fh,
     row = L.row,
@@ -1375,6 +1377,7 @@ local function open_windows(state)
     anchor = "NW",
     focus = true,
   })
+  state.panel_lwidth, state.panel_rwidth = L.lw, L.rw
   state.lwidth = state.fwin.width
   state.rwidth = state.rwin.width
   state.fheight = state.fwin.height
@@ -1486,7 +1489,10 @@ local function open_review()
     elseif key == "e" and state.pane == "files" then
       edit_selected_file(state)
     elseif key == "s" then
-      if submit(state) then
+      if submit(state, function()
+        open_windows(state)
+        redraw(state)
+      end) then
         return
       end
       redraw(state)

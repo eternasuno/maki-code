@@ -16,6 +16,9 @@ local function test(name, fn)
   end
   print((ok and "PASS " or "FAIL ") .. name .. (ok and "" or ": " .. tostring(err)))
 end
+local Layout = require("common.layout")
+local open_panel = Layout.open_panel
+
 local function fixture(paths, sources)
   local f = {
     paths = paths or { "a.lua" },
@@ -24,6 +27,9 @@ local function fixture(paths, sources)
     windows = {},
     flashes = {},
     sessions = {},
+    edits = {},
+    input_reads = 0,
+    draft = "",
     commands = {},
     registrations = {},
     size = { cols = 120, rows = 30 },
@@ -45,12 +51,21 @@ local function fixture(paths, sources)
     end
     return table.concat(result, "\n")
   end
-  function f:win(title)
-    for i = #self.windows, 1, -1 do
-      if self.windows[i].opts.title == " " .. title .. " " then
-        return self.windows[i]
-      end
+  local panels = {}
+  Layout.open_panel = function(buf, opts)
+    local panel = open_panel(buf, opts)
+    local content = f.windows[#f.windows]
+    content.frame = f.windows[#f.windows - 1]
+    panels[opts.title:match("^%s*(.-)%s*$")] = content
+    local set_config = panel.set_config
+    function panel:set_config(config)
+      content.config = config
+      return set_config(self, config)
     end
+    return panel
+  end
+  function f:win(title)
+    return panels[title]
   end
   function f:text(title)
     return plain(self:win(title).buf.content)
@@ -85,6 +100,20 @@ local function fixture(paths, sources)
       end,
       create_autocmd = function()
         f.autocmds = f.autocmds + 1
+      end,
+    },
+    async = {
+      sleep = function(ms)
+        eq(ms, 16)
+        f.sleeps = (f.sleeps or 0) + 1
+        for _, win in ipairs(f.windows) do
+          if win.closed and f.focused == win then
+            f.focused = nil
+          end
+        end
+        if f.on_sleep then
+          f.on_sleep()
+        end
       end,
     },
     fn = {
@@ -130,18 +159,47 @@ local function fixture(paths, sources)
       end,
     },
     session = {
+      prompt = function()
+        error("must not auto-send")
+      end,
       new = function(opts)
         f.sessions[#f.sessions + 1] = opts
-        if f.submit_throw then
-          error("session panic")
-        end
-        if f.submit_fail then
-          return nil, "session unavailable"
-        end
-        return "new-session"
+        error("session.new must not be called")
       end,
     },
     ui = {
+      input = function()
+        f.input_reads = f.input_reads + 1
+        if f.input_throw then
+          error("snapshot panic")
+        end
+        if f.input_fail then
+          return nil, "snapshot unavailable"
+        end
+        return { text = f.draft, cursor = 0, version = 17, session_id = f.session_id or "current-chat" }
+      end,
+      input_edit = function(opts)
+        assert(not f.focused, "Focused overlay still covers input")
+        eq(opts.start, #f.draft)
+        eq(opts.stop, #f.draft)
+        eq(opts.version, 17)
+        eq(opts.session_id, "current-chat")
+        f.edits[#f.edits + 1] = opts
+        if f.notscreen and #f.edits <= f.notscreen then
+          return nil, "the chat input is not on screen, so it cannot be edited"
+        end
+        if f.submit_throw then
+          error("input panic")
+        end
+        if f.submit_fail then
+          return nil, "input unavailable"
+        end
+        f.draft = f.draft .. opts.text
+        return true
+      end,
+      action = function()
+        error("must not auto-send")
+      end,
       open_editor = function(path)
         f.editor_paths = f.editor_paths or {}
         f.editor_paths[#f.editor_paths + 1] = path
@@ -177,17 +235,28 @@ local function fixture(paths, sources)
         if f.open_error and #f.windows == 1 then
           error("window unavailable")
         end
-        local win = { buf = buf, opts = opts }
+        local win = { buf = buf, opts = opts, width = opts.width, height = opts.height }
         function win:set_cursor(row)
           self.cursor = row
         end
         function win:set_config(config)
           self.config = config
         end
+        function win:hide()
+          self.hidden = true
+        end
+        function win:show()
+          self.hidden = false
+          if self.opts.focus then
+            f.focused = self
+          end
+          f.last_shown = self
+        end
         function win:close()
           self.closed = true
         end
         function win:recv()
+          assert(not self.closed, "Cannot receive events on closed window")
           while true do
             local event = table.remove(f.queue, 1)
             if type(event) == "function" then
@@ -196,6 +265,9 @@ local function fixture(paths, sources)
               return event
             end
           end
+        end
+        if opts.focus then
+          f.focused = win
         end
         f.windows[#f.windows + 1] = win
         return win
@@ -347,7 +419,9 @@ for _, pane in ipairs({ "files", "source" }) do
       eq(#f.editor_paths, 1)
       contains(f:at("Files"), "b.lua")
       contains(f:text("Files"), "new.lua")
-      eq(f:win(pane == "files" and "Files" or "Source").config.border, "double")
+      local config = f:win(pane == "files" and "Files" or "Source").config
+      eq(config.border, "none")
+      eq(config.active, true)
       contains(f:at("Source"), pane == "files" and "changed other" or "changed second")
     end)
     f:key("q")
@@ -368,7 +442,8 @@ test("Source edit ignores a selected directory", function()
     eq(#f.editor_paths, 1)
     contains(f:text("Source"), "after")
     contains(f:at("Files"), "dir")
-    eq(f:win("Source").config.border, "double")
+    eq(f:win("Source").config.border, "none")
+    eq(f:win("Source").config.active, true)
   end)
   f:key("q")
   f:run()
@@ -601,7 +676,13 @@ test("numbers focus boxes while Tab h l stay local and editor retains digits", f
   local f = fixture()
   local function active(title)
     f:check(function()
-      eq(f:win(title).config.border, "double")
+      for _, name in ipairs({ "Files", "Comments", "Source" }) do
+        local config = f:win(name).config
+        eq(config.border, "none")
+        eq(config.active, name == title)
+        eq(f:win(name).frame.buf.content[1][1][2].fg, name == title and "#bb9af7" or "#8b949e")
+        eq(f:win(name).opts.title, "")
+      end
     end)
   end
   f:key("l")
@@ -644,6 +725,8 @@ test("no-comment submit exact flash and remains open", function()
   f:check(function()
     eq(f.flashes[1], "No comments to submit")
     eq(#f.sessions, 0)
+    eq(f.input_reads, 0)
+    eq(#f.edits, 0)
   end)
   f:key("q")
   f:run()
@@ -651,14 +734,17 @@ end)
 
 test("focused successful submit snapshots and clears reopened comments", function()
   local f = fixture()
+  f.draft = "已有中文草稿\n继续"
   f:key("<CR>")
   f:key("j")
   comment(f, "fix this")
   f:key("s")
   f:run()
-  eq(#f.sessions, 1)
-  eq(f.sessions[1].focus, true)
-  local prompt = f.sessions[1].prompt
+  eq(#f.sessions, 0)
+  eq(#f.edits, 1)
+  local prompt = f.edits[1].text
+  eq(prompt:sub(1, 2), "\n\n")
+  eq(f.draft, "已有中文草稿\n继续" .. prompt)
   contains(prompt, "Read the actual current files before making changes.")
   contains(prompt, "may be stale; verify the current contents and line locations.")
   contains(prompt, "File: a.lua\nLines: 2-2\nComment: fix this")
@@ -670,7 +756,7 @@ test("focused successful submit snapshots and clears reopened comments", functio
   f:run()
 end)
 
-for _, mode in ipairs({ "submit_fail", "submit_throw" }) do
+for _, mode in ipairs({ "submit_fail", "submit_throw", "input_fail", "input_throw" }) do
   test("failed submit retains comments on reopen " .. mode, function()
     local f = fixture()
     f[mode] = true
@@ -678,18 +764,51 @@ for _, mode in ipairs({ "submit_fail", "submit_throw" }) do
     comment(f, "retain")
     f:key("s")
     f:check(function()
-      contains(f.flashes[#f.flashes], "Failed to start session:")
+      contains(f.flashes[#f.flashes], "Failed to fill chat input:")
       contains(f:text("Comments"), "retain")
+      eq(f.focused, f:win("Files"))
+      assert(not f:win("Files").closed)
+      if mode == "submit_fail" or mode == "submit_throw" then
+        eq(#f.windows, 12)
+        for i = 1, 6 do
+          assert(f.windows[i].closed)
+        end
+      end
+      eq(f.draft, "")
     end)
     f:key("q")
     f:run()
     f:check(function()
       contains(f:text("Comments"), "retain")
     end)
-    f:key("q")
+    f:check(function()
+      f[mode] = false
+    end)
+    f:key("s")
     f:run()
+    contains(f.draft, "retain")
+    eq(#f.sessions, 0)
   end)
 end
+
+test("session switch during close tick retains source comments", function()
+  local f = fixture()
+  f.draft = "中文草稿"
+  f.on_sleep = function()
+    f.session_id = "other-chat"
+  end
+  f:key("<CR>")
+  comment(f, "retain")
+  f:key("s")
+  f:check(function()
+    eq(#f.edits, 0)
+    eq(f.draft, "中文草稿")
+    contains(f:text("Comments"), "retain")
+    contains(f.flashes[#f.flashes], "Focused session changed")
+  end)
+  f:key("q")
+  f:run()
+end)
 
 test("refresh current contents and deleted file preserves comments", function()
   local f = fixture()
@@ -713,7 +832,7 @@ test("refresh current contents and deleted file preserves comments", function()
   end)
   f:key("s")
   f:run()
-  contains(f.sessions[1].prompt, "1: source 1")
+  contains(f.edits[1].text, "1: source 1")
 end)
 
 local errors = {
@@ -818,8 +937,8 @@ test("resize recreates windows preserves editor and cleans up", function()
   end)
   f.queue[#f.queue + 1] = { type = "resize" }
   f:check(function()
-    eq(#f.windows, 6)
-    for i = 1, 3 do
+    eq(#f.windows, 12)
+    for i = 1, 6 do
       assert(f.windows[i].closed)
     end
     contains(f:text("Source"), "resize retained")
@@ -833,7 +952,7 @@ test("unchanged resize and close event cleanup", function()
   local f = fixture()
   f.queue[#f.queue + 1] = { type = "resize" }
   f:check(function()
-    eq(#f.windows, 3)
+    eq(#f.windows, 6)
   end)
   f.queue[#f.queue + 1] = { type = "close" }
   f:run()
@@ -855,7 +974,7 @@ test("event loop error closes all windows", function()
     error("event failure")
   end)
   f.commands["/code"].handler()
-  eq(#f.windows, 3)
+  eq(#f.windows, 6)
   for _, win in ipairs(f.windows) do
     assert(win.closed)
   end

@@ -276,7 +276,7 @@ fn commands_and_turn_end_work_with_declared_permissions() {
     for command in ["/code", "/review"] {
         event.run_command(Arc::from(PLUGIN_NAME), Arc::from(command), String::new(), 0);
         let mut windows = Vec::new();
-        for _ in 0..if command == "/code" { 3 } else { 4 } {
+        for _ in 0..if command == "/code" { 6 } else { 8 } {
             let action = rx
                 .recv_timeout(Duration::from_secs(10))
                 .expect("command did not open its panes");

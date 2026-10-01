@@ -408,4 +408,367 @@ test("pane numbers appear only in bracketed titles", function()
   end
 end)
 
+package.path = "./lua/?.lua;./lua/?/init.lua;" .. package.path
+local Layout = require("common.layout")
+local Utils = require("common.utils")
+local redraw_source = extract("local function render_clamped(", "--- preview loading")
+local windows_source = extract("local function layout(", "--- main loop")
+
+local function panel_fixture(cols, rows)
+  local windows = {}
+  local function mapped()
+    return { 1 }
+  end
+  local panel_env = setmetatable({
+    Layout = setmetatable({
+      open_panel = function(buf, opts)
+        local panel = Layout.open_panel(buf, opts)
+        panel.opts = opts
+        panel.frame = windows[#windows - 1]
+        panel.content = windows[#windows]
+        local set_config = panel.set_config
+        function panel:set_config(cfg)
+          self.config = cfg
+          return set_config(self, cfg)
+        end
+        return panel
+      end,
+    }, { __index = Layout }),
+    comments = {},
+    fit_path = Utils.fit_path,
+    display_len = Utils.display_len,
+    render_change_list = mapped,
+    render_commit_list = mapped,
+    render_comment_list = mapped,
+    render_diff = mapped,
+    render_commit_info = function() end,
+    render_comment_detail = function() end,
+    maki = {
+      ui = {
+        terminal_size = function()
+          return { cols = cols, rows = rows }
+        end,
+        buf = function()
+          return {
+            set_lines = function(self, lines)
+              self.content = lines
+            end,
+          }
+        end,
+        open_win = function(buf, opts)
+          local win = {
+            buf = buf,
+            opts = opts,
+            width = opts.width,
+            height = opts.height,
+            set_config = function(self, cfg)
+              self.config = cfg
+            end,
+            set_cursor = function(self, cursor)
+              self.cursor = cursor
+            end,
+            close = function(self)
+              self.closed = true
+            end,
+          }
+          windows[#windows + 1] = win
+          return win
+        end,
+      },
+    },
+  }, { __index = _G })
+  maki = panel_env.maki
+  local open_windows, redraw =
+    assert(load(windows_source .. redraw_source .. "return open_windows, redraw", path, "t", panel_env))()
+  local current = {
+    pane = "files",
+    src = "files",
+    wchanges = {},
+    fcursor = 1,
+    ccursor = 1,
+    mcursor = 1,
+    dcursor = 1,
+    fcollapsed = {},
+    ccollapsed = {},
+  }
+  for _, name in ipairs({ "fbuf", "cbuf", "mbuf", "rbuf" }) do
+    current[name] = {
+      len = function()
+        return 1
+      end,
+    }
+  end
+  open_windows(current)
+  return current, redraw
+end
+
+test("review windows reserve the column gap and keep stacked heights within the screen", function()
+  for _, cols in ipairs({ 2, 6, 20, 120 }) do
+    for _, rows in ipairs({ 2, 5, 10, 30 }) do
+      local current = panel_fixture(cols, rows)
+      local base = Layout.sizing()
+      assert(current.fwin.opts.height + current.cwin.opts.height + current.mwin.opts.height == base.h)
+      assert(current.rwin.opts.height == base.h)
+      assert(current.cwin.opts.row == current.fwin.opts.row + current.fwin.opts.height)
+      assert(current.mwin.opts.row == current.cwin.opts.row + current.cwin.opts.height)
+      assert(current.rwin.opts.col == current.fwin.opts.col + base.lw + base.gap)
+      for _, name in ipairs({ "fwin", "cwin", "mwin", "rwin" }) do
+        local win = current[name]
+        assert(win.height >= 0 and win.opts.row + win.height <= base.row + base.h)
+        assert(Utils.display_len(win.opts.title) <= math.max(win.opts.width - 2, 0))
+      end
+      if cols == 120 then
+        assert(current.fwin.opts.title == " Files " and current.rwin.opts.title == " Diff ")
+      end
+    end
+  end
+end)
+
+test("review redraw fits titles and footers while focus and editor keep single borders", function()
+  for _, cols in ipairs({ 2, 6, 20, 120 }) do
+    local current, redraw = panel_fixture(cols, 30)
+    current.change = { path = string.rep("界/long/", 50), adds = 123456, dels = 987654 }
+    for _, pane in ipairs({ "files", "commits", "comments", "diff" }) do
+      current.pane = pane
+      current.src = pane == "diff" and "files" or pane
+      current.sel_commit = { sha = string.rep("abcdef", 30) }
+      for _, editing in ipairs({ false, true }) do
+        current.centry = editing and {} or nil
+        redraw(current)
+        for _, entry in ipairs({
+          { "fwin", "files" },
+          { "cwin", "commits" },
+          { "mwin", "comments" },
+          { "rwin", "diff" },
+        }) do
+          local win = current[entry[1]]
+          local cfg = win.config
+          local active = editing and entry[2] == "diff" or not editing and pane == entry[2]
+          assert(cfg.border == "none")
+          assert(Utils.display_len(cfg.title) <= math.max(win.opts.width - 2, 0))
+          assert(Utils.sanitize_utf8(cfg.title) == cfg.title)
+          assert(cfg.active == active)
+          assert(win.frame.buf.content[1][1][2].fg == (active and "#bb9af7" or "#8b949e"))
+          assert(win.frame.opts.title == "" and win.content.opts.title == "")
+          local cells = 1
+          for _, pair in ipairs(cfg.footer or {}) do
+            cells = cells + Utils.display_len(pair[1]) + Utils.display_len(pair[2]) + 2
+          end
+          if #(cfg.footer or {}) > 0 then
+            assert(cells <= win.opts.width - 2)
+          end
+          if editing and entry[2] ~= "diff" then
+            assert(cfg.footer == nil or #cfg.footer == 0)
+          end
+        end
+      end
+    end
+  end
+end)
+
+local submit_source = extract("local function line_range_label(", "--- rendering")
+local function submission_fixture(draft)
+  local f = { draft = draft or "", reads = 0, edits = {}, windows = {}, flashes = {}, forbidden = 0 }
+  local current = {}
+  local function open_windows()
+    for _, name in ipairs({ "rwin", "cwin", "mwin", "fwin" }) do
+      local win = { visible = true }
+      function win:hide()
+        self.visible = false
+      end
+      function win:show()
+        self.visible = true
+        f.last_shown = self
+        if name == "fwin" then
+          f.focused = self
+        end
+      end
+      function win:close()
+        self.closed = true
+      end
+      function win:recv()
+        assert(not self.closed)
+        return { type = "key", key = "j" }
+      end
+      current[name] = win
+      f.windows[#f.windows + 1] = win
+    end
+    f.focused = current.fwin
+  end
+  open_windows()
+  local function forbidden()
+    f.forbidden = f.forbidden + 1
+    error("must not create a session or auto-send")
+  end
+  maki = {
+    session = { new = forbidden, prompt = forbidden },
+    async = {
+      sleep = function(ms)
+        assert(ms == 16)
+        f.sleeps = (f.sleeps or 0) + 1
+        for _, win in ipairs(f.windows) do
+          if win.closed and f.focused == win then
+            f.focused = nil
+          end
+        end
+        if f.on_sleep then
+          f.on_sleep()
+        end
+      end,
+    },
+    ui = {
+      action = forbidden,
+      flash = function(message)
+        f.flashes[#f.flashes + 1] = message
+      end,
+      input = function()
+        f.reads = f.reads + 1
+        if f.input_throw then
+          error("snapshot panic")
+        end
+        if f.input_fail then
+          return nil, "snapshot unavailable"
+        end
+        return { text = f.draft, cursor = 0, version = f.version or 23, session_id = f.session_id or "chat-id" }
+      end,
+      input_edit = function(opts)
+        assert(not f.focused, "Focused overlay still covers input")
+        assert(opts.start == #f.draft and opts.stop == #f.draft)
+        assert(opts.version == (f.version or 23) and opts.session_id == "chat-id")
+        f.edits[#f.edits + 1] = opts
+        if f.notscreen and #f.edits <= f.notscreen then
+          f.version = (f.version or 23) + 1
+          return nil, "the chat input is not on screen, so it cannot be edited"
+        end
+        if f.edit_throw then
+          error("edit panic")
+        end
+        if f.edit_fail then
+          return nil, "stale input"
+        end
+        f.draft = f.draft .. opts.text
+        return true
+      end,
+    },
+  }
+  package.path = "./lua/?.lua;./lua/?/init.lua;" .. package.path
+  local submit_env = setmetatable({
+    maki = maki,
+    Utils = require("common.utils"),
+    comments = {
+      { file = "example.lua", new_start = 7, new_end = 8, text = "fix it", snippet = "+line", commit = "abc" },
+    },
+  }, { __index = _G })
+  local submit = assert(load(submit_source .. "return submit", path, "t", submit_env))()
+  return f,
+    current,
+    submit_env,
+    function(current_state)
+      return submit(current_state, function()
+        open_windows()
+        current_state.redraws = (current_state.redraws or 0) + 1
+      end)
+    end
+end
+
+for _, draft in ipairs({ "", "已有中文草稿\n继续" }) do
+  test("review submit fills current input, draft=" .. draft, function()
+    local f, current, submit_env, submit = submission_fixture(draft)
+    assert(submit(current))
+    assert(#f.edits == 1 and f.forbidden == 0 and #submit_env.comments == 0)
+    local prompt = f.edits[1].text
+    assert(prompt:find("fix it", 1, true) and prompt:find("commit abc", 1, true))
+    if draft ~= "" then
+      assert(prompt:sub(1, 2) == "\n\n")
+    end
+    assert(f.draft == draft .. prompt)
+    for _, win in ipairs(f.windows) do
+      assert(win.closed)
+    end
+    assert(f.flashes[#f.flashes]:find("Prompt filled into chat input", 1, true))
+  end)
+end
+
+for _, mode in ipairs({ "edit_fail", "edit_throw", "input_fail", "input_throw" }) do
+  test("review submit restores windows and retries after " .. mode, function()
+    local f, current, submit_env, submit = submission_fixture("中文草稿")
+    local original = submit_env.comments[1]
+    f[mode] = true
+    assert(not submit(current))
+    if mode == "edit_fail" or mode == "edit_throw" then
+      assert(#f.edits == 1 and f.sleeps == 1)
+    end
+    assert(#submit_env.comments == 1 and submit_env.comments[1] == original)
+    assert(f.draft == "中文草稿" and f.forbidden == 0)
+    assert(current.fwin.visible and not current.fwin.closed)
+    assert(current.fwin:recv().key == "j")
+    assert(f.focused == current.fwin)
+    if mode == "edit_fail" or mode == "edit_throw" then
+      assert(#f.windows == 8 and current.redraws == 1)
+      for i = 1, 4 do
+        assert(f.windows[i].closed)
+      end
+    end
+    assert(f.flashes[#f.flashes]:find("Failed to fill chat input:", 1, true))
+    f[mode] = false
+    assert(submit(current) and #submit_env.comments == 0)
+    assert(f.draft:find("fix it", 1, true))
+  end)
+end
+
+test("review snapshot failure after close restores live windows", function()
+  local f, current, submit_env, submit = submission_fixture("中文草稿")
+  f.on_sleep = function()
+    f.input_fail = true
+  end
+  assert(not submit(current))
+  assert(#f.edits == 0 and #submit_env.comments == 1 and #f.windows == 8)
+  assert(current.redraws == 1 and current.fwin:recv().key == "j")
+  assert(f.draft == "中文草稿")
+end)
+
+test("review empty comments leave input and windows untouched", function()
+  local f, current, submit_env, submit = submission_fixture("中文草稿")
+  submit_env.comments = {}
+  assert(not submit(current))
+  assert(f.reads == 0 and #f.edits == 0 and f.draft == "中文草稿" and f.forbidden == 0)
+  for _, win in ipairs(f.windows) do
+    assert(win.visible and not win.closed)
+  end
+end)
+
+for _, failures in ipairs({ 2, 5 }) do
+  test("review not-on-screen retry bound " .. failures, function()
+    local f, current, submit_env, submit = submission_fixture("中文草稿")
+    f.notscreen = failures
+    local success = submit(current)
+    assert(success == (failures < 5))
+    assert(#f.edits == math.min(failures + 1, 5))
+    assert(f.sleeps == #f.edits and f.reads == #f.edits + 1)
+    if success then
+      assert(#submit_env.comments == 0 and current.fwin == nil)
+      assert(f.draft == "中文草稿" .. f.edits[#f.edits].text)
+    else
+      assert(#submit_env.comments == 1 and f.draft == "中文草稿")
+      assert(current.fwin:recv().key == "j")
+    end
+  end)
+end
+
+for _, tick in ipairs({ 1, 2 }) do
+  test("review session switch aborts on tick " .. tick, function()
+    local f, current, submit_env, submit = submission_fixture("中文草稿")
+    f.notscreen = 1
+    f.on_sleep = function()
+      if f.sleeps == tick then
+        f.session_id = "other-chat"
+      end
+    end
+    assert(not submit(current))
+    assert(#f.edits == tick - 1 and #submit_env.comments == 1)
+    assert(f.draft == "中文草稿" and current.fwin:recv().key == "j")
+    assert(f.flashes[#f.flashes]:find("Focused session changed", 1, true))
+  end)
+end
+
 print(tests .. " tests passed")

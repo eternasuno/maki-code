@@ -249,12 +249,14 @@ test("highlight maps source extensions and filenames", function()
     ["foo.rs"] = "rust",
     Dockerfile = "dockerfile",
   }) do
-    maki = { ui = {
-      highlight = function(_, lang)
-        eq(lang, expected)
-        return { {} }
-      end,
-    } }
+    maki = {
+      ui = {
+        highlight = function(_, lang)
+          eq(lang, expected)
+          return { {} }
+        end,
+      },
+    }
     assert(Highlight.highlight_file(path, { "source" }))
   end
 end)
@@ -327,14 +329,15 @@ test("layout sizing uses terminal dimensions", function()
   } }
   local size = Layout.sizing()
   eq(size.lw, 33)
-  eq(size.rw, 79)
+  eq(size.rw, 78)
+  eq(size.gap, 1)
   eq(size.h, 25)
   eq(size.row, 1)
   eq(size.col, 4)
 end)
 
 test("layout keeps both columns positive on narrow terminals", function()
-  for _, width in ipairs({ 20, 30, 60 }) do
+  for _, width in ipairs({ 2, 3, 4, 5, 6, 20, 30, 60, 120 }) do
     maki = { ui = {
       terminal_size = function()
         return { cols = width, rows = 20 }
@@ -342,7 +345,174 @@ test("layout keeps both columns positive on narrow terminals", function()
     } }
     local size = Layout.sizing()
     assert(size.lw > 0 and size.rw > 0)
-    assert(size.lw + size.rw <= width)
+    local w = math.max(2, math.floor(width * 0.94))
+    eq(size.gap, w >= 5 and 1 or 0)
+    eq(size.lw + size.gap + size.rw, w)
+    assert(size.lw + size.gap + size.rw <= width)
+  end
+end)
+
+test("panel titles trim whitespace and preserve focus without changing borders", function()
+  maki = nil
+  for _, active in ipairs({ false, true }) do
+    local cfg = Layout.panel_config(80, "  [1] Files 界é  ", active, {})
+    eq(cfg.border, "none")
+    eq(cfg.title, "[1] Files 界é")
+    eq(cfg.active, active)
+    assert(cfg.footer == nil or #cfg.footer == 0)
+  end
+end)
+
+test("panel titles fit tiny widths Unicode and long paths", function()
+  maki = nil
+  for _, title in ipairs({ " Files ", " 界界é😀é ", " " .. string.rep("long/path/", 50) .. " " }) do
+    for width = 0, 80 do
+      for _, active in ipairs({ false, true }) do
+        local cfg = Layout.panel_config(width, title, active, {})
+        eq(cfg.border, "none")
+        assert(Utils.display_len(cfg.title) <= math.max(width - 2, 0))
+        eq(Utils.sanitize_utf8(cfg.title), cfg.title)
+        eq(cfg.active, active)
+      end
+    end
+  end
+end)
+
+test("panel footer keeps only the full prefix fitting rendered cells", function()
+  maki = nil
+  for _, footer in ipairs({
+    { { "a", "b" }, { "c", "d" } },
+    { { "界", "é" }, { "😀", "é" }, { "Esc", "close" } },
+    { { "Enter", string.rep("long", 40) }, { "x", "y" } },
+  }) do
+    for width = 0, 200 do
+      local cfg = Layout.panel_config(width, " title ", true, footer)
+      local expected, cells = 0, 1
+      for _, pair in ipairs(footer) do
+        local next_cells = cells + Utils.display_len(pair[1]) + Utils.display_len(pair[2]) + 2
+        if next_cells > math.max(width - 2, 0) then
+          break
+        end
+        cells, expected = next_cells, expected + 1
+      end
+      eq(#(cfg.footer or {}), expected)
+      for i, pair in ipairs(cfg.footer or {}) do
+        eq(pair[1], footer[i][1])
+        eq(pair[2], footer[i][2])
+      end
+      if expected > 0 then
+        assert(cells <= width - 2)
+      end
+    end
+  end
+end)
+
+test("panel frame colors corners geometry and content delegation", function()
+  for _, width in ipairs({ 1, 2, 3, 8, 40 }) do
+    for _, height in ipairs({ 1, 2, 3, 9 }) do
+      local windows, closed = {}, {}
+      maki = {
+        ui = {
+          theme_style = function(name)
+            return { fg = name == "accent" and "#abcdef" or "#123456", bg = "#000000" }
+          end,
+          buf = function()
+            return {
+              set_lines = function(self, lines)
+                self.content = lines
+              end,
+            }
+          end,
+          open_win = function(buf, opts)
+            local win = { buf = buf, opts = opts, width = opts.width, height = opts.height }
+            function win:recv(timeout)
+              self.timeout = timeout
+              return { type = "scroll", row = 17 }
+            end
+            function win:set_cursor(row)
+              self.cursor = row
+            end
+            function win:close()
+              self.closed = true
+              closed[#closed + 1] = self
+            end
+            function win:hide()
+              self.hidden = true
+            end
+            function win:show()
+              self.hidden = false
+            end
+            function win:is_open()
+              return not self.closed
+            end
+            function win:is_visible()
+              return not self.closed and not self.hidden
+            end
+            windows[#windows + 1] = win
+            return win
+          end,
+        },
+      }
+      local buf = { content = { { { "unchanged source", "item" } } } }
+      local original = buf.content
+      local panel = Layout.open_panel(buf, { width = width, height = height, row = 4, col = 7, focus = true })
+      local frame, content = windows[1], windows[2]
+      eq(#windows, 2)
+      eq(frame.opts.focus, false)
+      eq(content.opts.focus, true)
+      eq(frame.opts.zindex, 49)
+      eq(content.opts.zindex, 50)
+      for _, win in ipairs(windows) do
+        eq(win.opts.border, "none")
+        eq(win.opts.title, "")
+        eq(#win.opts.footer, 0)
+        assert(win.width > 0 and win.height > 0)
+      end
+      eq(frame.width, width)
+      eq(frame.height, height)
+      eq(content.buf, buf)
+      eq(content.opts.row, 4 + (height >= 3 and 1 or 0))
+      eq(content.opts.col, 7 + (width >= 3 and 1 or 0))
+      eq(panel.width, width >= 3 and width - 2 or width)
+      eq(panel.height, height >= 3 and height - 2 or height)
+      for _, active in ipairs({ true, false }) do
+        panel:set_config(
+          Layout.panel_config(width, " [1] 界é/path/to/file ", active, { { "界", "é" }, { "q", "quit" } })
+        )
+        eq(#frame.buf.content, height)
+        for row, spans in ipairs(frame.buf.content) do
+          eq(Layout.spans_len(spans), width)
+          eq(spans[1][2].fg, active and "#bb9af7" or "#123456")
+          eq(spans[1][2].bg, nil)
+          local text = spans[1][1]
+          eq(Utils.sanitize_utf8(text), text)
+          assert(not text:find(">", 1, true))
+          if width >= 2 then
+            local left = row == 1 and "┌" or row == height and "└" or "│"
+            local right = row == 1 and "┐" or row == height and "┘" or "│"
+            eq(text:sub(1, #left), left)
+            eq(text:sub(-#right), right)
+          end
+        end
+      end
+      eq(buf.content, original)
+      local event = panel:recv(35)
+      eq(event.type, "scroll")
+      eq(event.row, 17)
+      eq(content.timeout, 35)
+      panel:set_cursor(17)
+      eq(content.cursor, 17)
+      eq(frame.cursor, nil)
+      assert(panel:is_open() and panel:is_visible())
+      panel:hide()
+      assert(frame.hidden and content.hidden and not panel:is_visible())
+      panel:show()
+      assert(not frame.hidden and not content.hidden and panel:is_visible())
+      panel:close()
+      eq(closed[1], content)
+      eq(closed[2], frame)
+      assert(not panel:is_open() and not panel:is_visible())
+    end
   end
 end)
 
