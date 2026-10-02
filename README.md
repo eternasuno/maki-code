@@ -9,7 +9,7 @@ Two independent Maki Lua plugins for reviewing code in the current workspace.
 
 Both UIs use kanban-style single-line panel borders with a one-column gap between the file lists and Source/Diff. The active pane uses purple (`#bb9af7`); inactive panes use the theme’s dim foreground, without a `>` title marker. Since the native Maki window API lacks border colors, a fixed custom buffer frame surrounds each borderless content window. Titles and footer hints are fitted in display cells, keeping complete corners and preventing window widening from covering adjacent borders. Only the active pane shows footer hints, and hints that do not fit are omitted; all key bindings remain available.
 
-Both file trees are collapsible and compress single-directory chains such as `src/foo/bar/`. `/code` lists tracked and non-ignored untracked files using `git ls-files --cached --others --exclude-standard`, scoped to the current directory. It does not filter by extension: configuration and other text files are also available. Outside a Git working tree, it shows an explicit error.
+Both file trees are collapsible and compress single-directory chains such as `src/foo/bar/`. `/code` lists tracked and non-ignored untracked files using `git ls-files --cached --others --exclude-standard`, scoped to the current directory, excluding tracked paths reported by `git ls-files --deleted`. Deleted files disappear when reopening `/code` or refreshing with `r`. It does not filter by extension: configuration and other text files are also available. Outside a Git working tree, it shows an explicit error.
 
 ## Key bindings
 

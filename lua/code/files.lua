@@ -16,13 +16,21 @@ local function files()
   if not root or not root:match("^true") then
     return nil, "Not a Git working tree: " .. tostring(err or root or "Git unavailable")
   end
+  local deleted_out, deleted_err = Shell.run("git ls-files -z --deleted -- .")
+  if not deleted_out then
+    return nil, deleted_err
+  end
+  local deleted = {}
+  for path in deleted_out:gmatch("([^%z]+)%z") do
+    deleted[path] = true
+  end
   local out, list_err = Shell.run("git ls-files -z --cached --others --exclude-standard -- .")
   if not out then
     return nil, list_err
   end
   local paths, seen = {}, {}
   for path in out:gmatch("([^%z]+)%z") do
-    if not seen[path] then
+    if not deleted[path] and not seen[path] then
       paths[#paths + 1] = path
       seen[path] = true
     end

@@ -584,6 +584,31 @@ test("session switch during close tick retains source comments", function()
   f:run()
 end)
 
+test("listing excludes deleted cached paths without breaking NUL filenames or deduplication", function()
+  local f = fixture({ "deleted\nfile.lua", "kept\nfile.lua", "kept\nfile.lua", "new file.txt" })
+  f.deleted = { "deleted\nfile.lua" }
+  local paths = assert(require("code.files").list())
+  eq(#paths, 2)
+  eq(paths[1], "kept\nfile.lua")
+  eq(paths[2], "new file.txt")
+  contains(f.last_command, "-z --cached --others --exclude-standard -- .")
+end)
+
+test("failed deleted-path refresh preserves the previous tree", function()
+  local f = fixture()
+  f:check(function()
+    f.deleted_error = "deleted listing failed"
+  end)
+  f:key("r")
+  f:check(function()
+    contains(f:text("Files"), "a.lua")
+    contains(f:text("Source"), "source 1")
+    contains(f.flashes[#f.flashes], "deleted listing failed")
+  end)
+  f:key("q")
+  f:run()
+end)
+
 test("refresh current contents and deleted file preserves comments", function()
   local f = fixture()
   f:key("<CR>")
@@ -595,7 +620,7 @@ test("refresh current contents and deleted file preserves comments", function()
   f:check(function()
     contains(f:text("Source"), "changed")
     contains(f:text("Comments"), "persistent")
-    f.paths = {}
+    f.deleted = { "a.lua" }
     f.missing = "a.lua"
   end)
   f:key("r")

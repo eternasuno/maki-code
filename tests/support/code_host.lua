@@ -141,6 +141,12 @@ function Host.new(paths, sources)
         return 1
       end,
       jobwait = function()
+        if f.last_command:find("--deleted", 1, true) then
+          if f.deleted_error then
+            return { exit_code = 1, stderr = f.deleted_error }
+          end
+          return { exit_code = 0, stdout = table.concat(f.deleted or {}, "\0") .. "\0" }
+        end
         if f.git_error then
           return { exit_code = 1, stderr = f.git_error }
         end
