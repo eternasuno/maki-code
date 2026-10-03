@@ -205,10 +205,30 @@ function M.open_panel(buf, opts)
   return panel
 end
 
-function M.sizing()
+function M.open_root()
+  return maki.ui.open_win(maki.ui.buf(), {
+    width = "90%",
+    height = "90%",
+    border = "none",
+    focus = false,
+    zindex = 48,
+  })
+end
+
+function M.attach_root(panel, state)
+  local close = panel.close
+  function panel:close()
+    close(self)
+    if state.rootwin then
+      state.rootwin:close()
+      state.rootwin = nil
+    end
+  end
+end
+
+function M.sizing(extent)
   local sz = maki.ui.terminal_size()
-  local w = math.max(2, math.floor(sz.cols * 0.94))
-  local h = math.max(2, math.floor(sz.rows * 0.86))
+  local w, h = extent.width, extent.height
   local lw = math.min(math.max(28, math.min(46, math.floor(w * 0.30))), math.floor(w / 2))
   local gap = w >= 5 and 1 or 0
   local rw = w - lw - gap

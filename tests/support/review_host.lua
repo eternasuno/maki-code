@@ -214,7 +214,18 @@ function Host.new()
         if h.open_fail_at == h.counts.open then
           error("open panic")
         end
-        local w = { buf = buf, opts = opts, width = opts.width, height = opts.height }
+        local function dimension(value, total)
+          if type(value) == "string" then
+            return math.max(2, math.floor(total * tonumber(value:match("^(%d+)%%$")) / 100))
+          end
+          return value
+        end
+        local w = {
+          buf = buf,
+          opts = opts,
+          width = dimension(opts.width, h.size.cols),
+          height = dimension(opts.height, h.size.rows),
+        }
         function w:set_cursor(row)
           self.cursor = row
         end

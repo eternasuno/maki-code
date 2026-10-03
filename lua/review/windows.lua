@@ -4,8 +4,8 @@ local Text = require("common.text")
 local fit_path = Text.fit_path
 local M = {}
 
-local function layout()
-  local base = Layout.sizing()
+local function layout(root)
+  local base = Layout.sizing(root)
   local lw, rw, h, row, col = base.lw, base.rw, base.h, base.row, base.col
   local fh = math.min(math.max(math.floor(h * 0.38), 5), math.max(h - 2, 1))
   local ch = math.min(math.max(math.floor(h * 0.34), 5), math.max(h - fh - 1, 0))
@@ -27,11 +27,13 @@ end
 -- receives keys; the other windows are display-only.
 local function open_windows(state)
   M.close(state)
-  if state.fwin or state.cwin or state.mwin or state.rwin then
+  if state.fwin or state.cwin or state.mwin or state.rwin or state.rootwin then
     error("Cannot reopen review windows: previous windows could not be closed")
   end
   state.render_signatures = {}
-  local L = layout()
+  state.rootwin = Layout.open_root()
+  local L = layout(state.rootwin)
+  state.rootwin:set_config({ row = L.row, col = L.col, anchor = "NW" })
   state.rwin = Layout.open_panel(state.rbuf, {
     title = fit_path(" Diff ", math.max(L.rw - 2, 0)),
     width = L.rw,
@@ -68,6 +70,7 @@ local function open_windows(state)
     anchor = "NW",
     focus = true,
   })
+  Layout.attach_root(state.fwin, state)
   state.panel_lwidth, state.panel_rwidth = L.lw, L.rw
   state.lwidth = state.fwin.width
   state.rwidth = state.rwin.width
@@ -80,7 +83,7 @@ end
 
 function M.close(state)
   local errors = {}
-  for _, name in ipairs({ "fwin", "cwin", "mwin", "rwin" }) do
+  for _, name in ipairs({ "fwin", "cwin", "mwin", "rwin", "rootwin" }) do
     local window = state[name]
     if window then
       local ok, err = pcall(function()

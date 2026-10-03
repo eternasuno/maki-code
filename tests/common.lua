@@ -363,19 +363,42 @@ test("layout spans are padded and styles copied without mutation", function()
   eq(Layout.blend("#000000", "#ffffff", 0.5), "#808080")
 end)
 
-test("layout sizing uses terminal dimensions", function()
+test("layout sizing uses host extent and terminal centering", function()
   maki = { ui = {
     terminal_size = function()
       return { cols = 120, rows = 30 }
     end,
   } }
-  local size = Layout.sizing()
-  eq(size.lw, 33)
-  eq(size.rw, 78)
+  local size = Layout.sizing({ width = 100, height = 24 })
+  eq(size.lw, 30)
+  eq(size.rw, 69)
   eq(size.gap, 1)
-  eq(size.h, 25)
-  eq(size.row, 1)
-  eq(size.col, 4)
+  eq(size.h, 24)
+  eq(size.row, 2)
+  eq(size.col, 10)
+end)
+
+test("root is a real native percentage background window", function()
+  local root = { width = 101, height = 23 }
+  local buffer = {}
+  maki = {
+    ui = {
+      buf = function()
+        return buffer
+      end,
+      open_win = function(buf, opts)
+        eq(buf, buffer)
+        eq(opts.width, "90%")
+        eq(opts.height, "90%")
+        eq(opts.border, "none")
+        eq(opts.focus, false)
+        eq(opts.zindex, 48)
+        assert(opts.visible ~= false)
+        return root
+      end,
+    },
+  }
+  eq(Layout.open_root(), root)
 end)
 
 test("layout keeps both columns positive on narrow terminals", function()
@@ -385,9 +408,9 @@ test("layout keeps both columns positive on narrow terminals", function()
         return { cols = width, rows = 20 }
       end,
     } }
-    local size = Layout.sizing()
+    local w = width
+    local size = Layout.sizing({ width = w, height = 18 })
     assert(size.lw > 0 and size.rw > 0)
-    local w = math.max(2, math.floor(width * 0.94))
     eq(size.gap, w >= 5 and 1 or 0)
     eq(size.lw + size.gap + size.rw, w)
     assert(size.lw + size.gap + size.rw <= width)

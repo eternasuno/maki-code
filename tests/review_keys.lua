@@ -621,7 +621,7 @@ for _, failure in ipairs({ "snapshot", "snapshot panic", "second snapshot", "edi
     eq(h.draft, "")
     assert(s.fwin and s.rwin)
     contains(last_flash(h), "Failed to fill chat input")
-    eq(h.counts.open, failure:find("snapshot", 1, true) and failure ~= "second snapshot" and 8 or 16)
+    eq(h.counts.open, failure:find("snapshot", 1, true) and failure ~= "second snapshot" and 9 or 18)
     h.input_fail, h.input_throw, h.input_fail_at, h.input_edit_fail, h.input_edit_throw = nil, nil, nil, nil, nil
     eq(h:key("s"), false)
     eq(#h.comments.store, 0)
@@ -667,7 +667,7 @@ test("failed panel close retains resources and blocks reopen until retry", funct
   local s = h:open()
   local Windows = require("review.windows")
   local panel = s.rwin
-  local native = h.windows[1]
+  local native = h.windows[2]
   local close = native.close
   local attempts = 0
   native.close = function()
@@ -680,11 +680,14 @@ test("failed panel close retains resources and blocks reopen until retry", funct
   eq(s.cwin, nil)
   eq(s.mwin, nil)
   assert(not native.closed)
-  for i = 2, 8 do
-    assert(h.windows[i].closed)
+  for i, window in ipairs(h.windows) do
+    if i ~= 2 then
+      assert(window.closed)
+    end
   end
+  eq(s.rootwin, nil)
   eq(pcall(Windows.open, s), false)
-  eq(#h.windows, 8)
+  eq(#h.windows, 9)
   eq(s.rwin, panel)
   assert(attempts >= 2)
   contains(h.errors[1], "review close failed:")
@@ -694,7 +697,7 @@ test("failed panel close retains resources and blocks reopen until retry", funct
   h:closed()
 end)
 
-for fail_at = 1, 8 do
+for fail_at = 1, 9 do
   test("partial window creation cleanup at native window " .. fail_at, function(h)
     h.open_fail_at = fail_at
     local s = h.browser.create_state(h.root, assert(h.git.changes(h.root)), assert(h.git.log(h.root)))
@@ -703,6 +706,7 @@ for fail_at = 1, 8 do
     h:closed()
     eq(s.fwin, nil)
     eq(s.rwin, nil)
+    eq(s.rootwin, nil)
   end)
 end
 
@@ -750,21 +754,64 @@ for _, scenario in ipairs({ "initial render", "event render", "resize", "recv", 
   end)
 end
 
+test("native percentage root owns panel extent and closes on submission", function(h)
+  local open_win = maki.ui.open_win
+  maki.ui.open_win = function(buf, opts)
+    local win = open_win(buf, opts)
+    if opts.width == "90%" then
+      win.width, win.height = 100, 24
+    end
+    return win
+  end
+  local s = h:open()
+  local root = s.rootwin
+  eq(root.opts.width, "90%")
+  eq(root.opts.height, "90%")
+  eq(root.opts.focus, false)
+  eq(root.opts.border, "none")
+  eq(root.opts.zindex, 48)
+  eq(s.panel_lwidth + s.panel_rwidth + 1, root.width)
+  eq(h.windows[2].height, root.height)
+  eq(root.config.row, 2)
+  eq(root.config.col, 10)
+  save(h, "submit")
+  eq(h:key("s"), false)
+  eq(s.rootwin, nil)
+  assert(root.closed)
+end)
+
+test("failed root close retains resource and blocks reopen until retry", function(h)
+  local s = h:open()
+  local Windows = require("review.windows")
+  local root = s.rootwin
+  local close = root.close
+  root.close = function()
+    error("root close unavailable")
+  end
+  Windows.close(s)
+  eq(s.rootwin, root)
+  eq(pcall(Windows.open, s), false)
+  eq(#h.windows, 9)
+  root.close = close
+  Windows.close(s)
+  eq(s.rootwin, nil)
+end)
+
 test("resize recreates panels only when terminal dimensions change", function(h)
   local s = h:open()
   h.browser.handle_event(s, { type = "resize" })
-  eq(h.counts.open, 8)
+  eq(h.counts.open, 9)
   h.size = { cols = 60, rows = 18 }
   h.browser.handle_event(s, { type = "resize" })
-  eq(h.counts.open, 16)
+  eq(h.counts.open, 18)
   eq(h.counts.build, 1)
   eq(h.counts.diff, 1)
-  for i = 1, 8 do
+  for i = 1, 9 do
     assert(h.windows[i].closed)
   end
-  local right_frame, files_frame = h.windows[9], h.windows[15]
+  local right_frame, files_frame = h.windows[11], h.windows[17]
   assert(right_frame.opts.col >= files_frame.opts.col + files_frame.opts.width + 1)
-  for i = 9, 16 do
+  for i = 11, 18 do
     local w = h.windows[i]
     assert(w.opts.row + w.height <= h.size.rows)
     assert(w.opts.col + w.width <= h.size.cols)
@@ -831,7 +878,7 @@ for _, event in ipairs({ { type = "close" }, { type = "key", key = "<C-c>" }, { 
     h:closed()
     eq(s.fwin, nil)
     h.browser.close(s)
-    eq(h.counts.close, 8)
+    eq(h.counts.close, 9)
   end)
 end
 

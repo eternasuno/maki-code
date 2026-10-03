@@ -67,6 +67,28 @@ local function old_wrap(text, width)
 end
 
 return function(test, eq)
+  test("styled wrapping preserves whitespace styles and Unicode", function()
+    maki = nil
+    local style = { fg = "#ffffff", bold = true }
+    local spans = { { "ab  ", "item" }, { "界é\txyz", style } }
+    local rows = Text.wrap_spans(spans, 4)
+    local pieces = {}
+    for _, row in ipairs(rows) do
+      local cells = 0
+      for _, span in ipairs(row) do
+        cells = cells + Text.display_len(span[1])
+        pieces[#pieces + 1] = span[1]
+        eq(span[2], #pieces == 1 and "item" or style)
+      end
+      assert(cells <= 4)
+    end
+    eq(table.concat(pieces), "ab  界é    xyz")
+    eq(rows[2][1][1], "界é ")
+    eq(spans[2][1], "界é\txyz")
+    eq(#Text.wrap_spans({ { "", "item" } }, 4), 1)
+    eq(#Text.wrap_spans({ { "abcd", "item" } }, 4), 1)
+    eq(#Text.wrap_spans({ { "ab", "item" } }, 0), 2)
+  end)
   test("wrap differential whitespace UTF8 widths and final remainder", function()
     maki = nil
     local cases = {

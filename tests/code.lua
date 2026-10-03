@@ -246,8 +246,8 @@ test("file paging selection and refresh listing", function()
   local f = fixture(paths, sources)
   f:key("<PageDown>")
   f:check(function()
-    contains(f:at("Files"), "14.lua")
-    contains(f:text("Source"), "contents 14")
+    contains(f:at("Files"), "15.lua")
+    contains(f:text("Source"), "contents 15")
   end)
   f:key("<PageUp>")
   f:key("<Down>")
@@ -284,7 +284,7 @@ test("source selection arrows pages endpoints and pane return", function()
   end)
   f:key("<PageDown>")
   f:check(function()
-    contains(f:at("Source"), "source 25")
+    contains(f:at("Source"), "source 27")
   end)
   f:key("<PageUp>")
   f:key("G")
@@ -543,8 +543,8 @@ for _, mode in ipairs({ "submit_throw", "input_throw" }) do
       eq(f.focused, f:win("Files"))
       assert(not f:win("Files").closed)
       if mode == "submit_throw" then
-        eq(#f.windows, 12)
-        for i = 1, 6 do
+        eq(#f.windows, 14)
+        for i = 1, 7 do
           assert(f.windows[i].closed)
         end
       end
@@ -713,6 +713,70 @@ for _, case in ipairs(errors) do
   end)
 end
 
+test("Source soft wraps with original line navigation comments and resize", function()
+  local long = string.rep("界ab  ", 30)
+  local f = fixture(nil, { ["a.lua"] = long .. "\nsecond\n" })
+  local function wrapped_rows(selected)
+    local win = f:win("Source")
+    local text, count = {}, 0
+    for i = 2, #win.buf.content do
+      local row = win.buf.content[i]
+      if i > 2 and row[1][1] ~= "      ↪ " then
+        break
+      end
+      count = count + 1
+      local start = i == 2 and 3 or 2
+      local width = 0
+      for j, span in ipairs(row) do
+        width = width + Utils.display_len(span[1])
+        if selected then
+          eq(span[2], "selected")
+        end
+        if j >= start and not (selected and j == #row and span[1]:match("^ +$")) then
+          text[#text + 1] = span[1]
+        end
+      end
+      assert(width <= win.width)
+    end
+    assert(count > 1)
+    if not selected then
+      eq(table.concat(text), long)
+    end
+    return count
+  end
+  local initial
+  f:check(function()
+    initial = wrapped_rows(false)
+  end)
+  f:key("3")
+  f:check(function()
+    wrapped_rows(true)
+  end)
+  f:key("j")
+  f:check(function()
+    contains(f:at("Source"), "2 second")
+  end)
+  f:key("k")
+  f:key("v")
+  f:key("j")
+  comment(f, "wrapped range")
+  f:check(function()
+    contains(f:text("Comments"), "a.lua:1-2 wrapped range")
+    local record = require("code.comments").store[1]
+    eq(record.start_line, 1)
+    eq(record.end_line, 2)
+    contains(record.snippet, long)
+    f.size = { cols = 90, rows = 35 }
+  end)
+  f.queue[#f.queue + 1] = { type = "resize" }
+  f:check(function()
+    assert(wrapped_rows(false) > initial)
+    contains(f:at("Source"), "2 second")
+  end)
+  f:key("q")
+  f:run()
+end)
+
 test("line display limit and CRLF", function()
   local f = fixture(nil, { ["a.lua"] = string.rep("line\r\n", 10001) })
   f:key("<CR>")
@@ -736,8 +800,8 @@ test("resize recreates windows preserves editor and cleans up", function()
   end)
   f.queue[#f.queue + 1] = { type = "resize" }
   f:check(function()
-    eq(#f.windows, 12)
-    for i = 1, 6 do
+    eq(#f.windows, 14)
+    for i = 1, 7 do
       assert(f.windows[i].closed)
     end
     contains(f:text("Source"), "resize retained")
@@ -751,7 +815,7 @@ test("unchanged resize and close event cleanup", function()
   local f = fixture()
   f.queue[#f.queue + 1] = { type = "resize" }
   f:check(function()
-    eq(#f.windows, 6)
+    eq(#f.windows, 7)
   end)
   f.queue[#f.queue + 1] = { type = "close" }
   f:run()
@@ -763,7 +827,7 @@ test("failed panel close retains resources and blocks reopen until retry", funct
   local s = { fbuf = maki.ui.buf(), mbuf = maki.ui.buf(), sbuf = maki.ui.buf() }
   Render.open_windows(s)
   local panel = s.swin
-  local native = f.windows[1]
+  local native = f.windows[2]
   local close = native.close
   local attempts = 0
   native.close = function()
@@ -775,11 +839,13 @@ test("failed panel close retains resources and blocks reopen until retry", funct
   eq(s.fwin, nil)
   eq(s.mwin, nil)
   assert(not native.closed)
-  for i = 2, 6 do
-    assert(f.windows[i].closed)
+  for i = 1, 7 do
+    if i ~= 2 then
+      assert(f.windows[i].closed)
+    end
   end
   eq(pcall(Render.open_windows, s), false)
-  eq(#f.windows, 6)
+  eq(#f.windows, 7)
   eq(s.swin, panel)
   eq(attempts, 2)
   native.close = close
@@ -804,7 +870,7 @@ test("event loop error closes all windows", function()
     error("event failure")
   end)
   f.commands["/code"].handler()
-  eq(#f.windows, 6)
+  eq(#f.windows, 7)
   for _, win in ipairs(f.windows) do
     assert(win.closed)
   end

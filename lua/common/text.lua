@@ -164,6 +164,35 @@ function M.wrap(text, width)
   return lines
 end
 
+function M.wrap_spans(spans, width)
+  width = math.max(math.floor(width), 1)
+  local lines, row, cells = {}, {}, 0
+  for _, span in ipairs(spans) do
+    local part = {}
+    local function flush()
+      if #part > 0 then
+        row[#row + 1] = { table.concat(part), span[2] }
+        part = {}
+      end
+    end
+    chars(span[1]:gsub("\t", "    "), function(c)
+      local n = M.display_len(c)
+      if cells > 0 and cells + n > width then
+        flush()
+        lines[#lines + 1] = row
+        row, cells = {}, 0
+      end
+      part[#part + 1] = c
+      cells = cells + n
+    end)
+    flush()
+  end
+  if #row > 0 or #lines == 0 then
+    lines[#lines + 1] = row
+  end
+  return lines
+end
+
 function M.first_line(text, width)
   width = math.max(math.floor(width), 1)
   local raw = M.sanitize_utf8(text:match("^[^\n]*"))

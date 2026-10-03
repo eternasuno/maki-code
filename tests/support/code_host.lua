@@ -267,7 +267,18 @@ function Host.new(paths, sources)
         if f.open_error and #f.windows == 1 then
           error("window unavailable")
         end
-        local win = { buf = buf, opts = opts, width = opts.width, height = opts.height }
+        local function dimension(value, total)
+          if type(value) == "string" then
+            return math.max(2, math.floor(total * tonumber(value:match("^(%d+)%%$")) / 100))
+          end
+          return value
+        end
+        local win = {
+          buf = buf,
+          opts = opts,
+          width = dimension(opts.width, f.size.cols),
+          height = dimension(opts.height, f.size.rows),
+        }
         function win:set_cursor(row)
           self.cursor = row
         end

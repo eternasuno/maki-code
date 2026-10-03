@@ -98,6 +98,17 @@ fn unicode_layout_and_highlighting_use_real_host_apis() {
         assert(layout.blend("#000000", "#ffffff", 0.5) == "#808080")
         local styled = highlight.highlight_file("example.rs", { "fn main() {}" })
         assert(styled ~= nil and #styled == 1)
+        local rows = text.wrap_spans(styled[1], 4)
+        assert(#rows > 1)
+        local reconstructed = {}
+        for _, row in ipairs(rows) do
+            assert(layout.spans_len(row) <= 4)
+            for _, span in ipairs(row) do
+                reconstructed[#reconstructed + 1] = span[1]
+                assert(span[2] ~= nil)
+            end
+        end
+        assert(table.concat(reconstructed) == "fn main() {}")
         assert(highlight.highlight_file("example.rs", {}) == nil)
     "##,
     );
@@ -404,7 +415,7 @@ fn commands_and_turn_end_work_with_declared_permissions() {
     for command in ["/code", "/review"] {
         event.run_command(Arc::from(PLUGIN_NAME), Arc::from(command), String::new(), 0);
         let mut windows = Vec::new();
-        for _ in 0..if command == "/code" { 6 } else { 8 } {
+        for _ in 0..if command == "/code" { 7 } else { 9 } {
             let action = rx
                 .recv_timeout(Duration::from_secs(10))
                 .expect("command did not open its panes");

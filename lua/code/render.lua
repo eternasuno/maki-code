@@ -14,7 +14,7 @@ local function clamp(n, count)
   return math.max(1, math.min(n, count))
 end
 local function close_windows(state)
-  for _, name in ipairs({ "fwin", "mwin", "swin" }) do
+  for _, name in ipairs({ "fwin", "mwin", "swin", "rootwin" }) do
     if state[name] then
       local ok = pcall(function()
         state[name]:close()
@@ -28,11 +28,13 @@ end
 
 local function open_windows(state)
   close_windows(state)
-  if state.fwin or state.mwin or state.swin then
+  if state.fwin or state.mwin or state.swin or state.rootwin then
     error("Cannot reopen code windows: previous windows could not be closed")
   end
   state.rendered = nil
-  local size = Layout.sizing()
+  state.rootwin = Layout.open_root()
+  local size = Layout.sizing(state.rootwin)
+  state.rootwin:set_config({ row = size.row, col = size.col, anchor = "NW" })
   local fh = math.max(1, math.floor(size.h * 0.6))
   local mh = math.max(1, size.h - fh)
   state.panel_width, state.panel_source_width = size.lw, size.rw
@@ -64,6 +66,7 @@ local function open_windows(state)
     anchor = "NW",
     focus = true,
   })
+  Layout.attach_root(state.fwin, state)
   state.width, state.source_width = state.fwin.width, state.swin.width
   state.term = maki.ui.terminal_size()
 end
@@ -177,21 +180,24 @@ local function render_source(state, maps)
     local last = state.anchor and math.max(state.anchor, state.line)
     for line, text in ipairs(state.lines) do
       local marked = maps.marked[line]
-      local spans = { { marked and "● " or "  ", "warning" }, { string.format("%5d ", line), "dim" } }
       local syntax = state.syntax and state.syntax[line] or { { text, "item" } }
-      for _, span in ipairs(syntax) do
-        spans[#spans + 1] = { span[1], span[2] }
-      end
-      if first and line >= first and line <= last then
-        spans = Layout.pad_spans(Layout.with_bg(spans, range_bg), state.source_width, { bg = range_bg })
-      end
       if line == state.line then
         cursor = #source + 1
-        if state.pane == "source" and not state.editor then
+      end
+      for part, wrapped in ipairs(Text.wrap_spans(syntax, state.source_width - 8)) do
+        local spans = part == 1 and { { marked and "● " or "  ", "warning" }, { string.format("%5d ", line), "dim" } }
+          or { { "      ↪ ", "dim" } }
+        for _, span in ipairs(wrapped) do
+          spans[#spans + 1] = span
+        end
+        if first and line >= first and line <= last then
+          spans = Layout.pad_spans(Layout.with_bg(spans, range_bg), state.source_width, { bg = range_bg })
+        end
+        if line == state.line and state.pane == "source" and not state.editor then
           spans = selected(spans, state.source_width)
         end
+        append(spans)
       end
-      append(spans)
       if
         state.editor
         and Comments.kind(state.editor.record) == "line"
