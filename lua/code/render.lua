@@ -184,7 +184,7 @@ local function render_source(state, maps)
       if line == state.line then
         cursor = #source + 1
       end
-      for part, wrapped in ipairs(Text.wrap_spans(syntax, state.source_width - 8)) do
+      for part, wrapped in ipairs(Text.wrap_spans(syntax, math.max(1, state.source_width - 10))) do
         local spans = part == 1 and { { marked and "● " or "  ", "warning" }, { string.format("%5d ", line), "dim" } }
           or { { "      ↪ ", "dim" } }
         for _, span in ipairs(wrapped) do

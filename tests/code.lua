@@ -737,6 +737,9 @@ test("Source soft wraps with original line navigation comments and resize", func
         end
       end
       assert(width <= win.width)
+      if not selected then
+        assert(width <= win.width - 2, "Expected two columns of right padding for source rows")
+      end
     end
     assert(count > 1)
     if not selected then
