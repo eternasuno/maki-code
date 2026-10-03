@@ -261,6 +261,12 @@ function Host.new(paths, sources)
         return {
           content = {},
           set_calls = 0,
+          get_lines = function(self)
+            return self.content
+          end,
+          on = function(self, event, callback)
+            self[event] = callback
+          end,
           set_lines = function(self, lines)
             self.set_calls = self.set_calls + 1
             for _, row in ipairs(lines) do
@@ -269,6 +275,9 @@ function Host.new(paths, sources)
               end
             end
             self.content = lines
+            if self.change then
+              self.change()
+            end
           end,
         }
       end,

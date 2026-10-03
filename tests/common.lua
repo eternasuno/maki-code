@@ -626,10 +626,79 @@ local function panel_mock()
   return f
 end
 
+test("focus snapshots clean buffers independently of queued old window closure", function()
+  local windows = {}
+  maki = {
+    ui = {
+      buf = function()
+        local b = { lines = {}, dirty = false }
+        function b:set_lines(lines)
+          self.lines, self.dirty = lines, true
+          if self.change then
+            self.change()
+          end
+        end
+        function b:get_lines()
+          return self.lines
+        end
+        function b:on(event, callback)
+          eq(event, "change")
+          self.change = callback
+        end
+        return b
+      end,
+      open_win = function(buf, opts)
+        local w = { buf = buf, width = opts.width, height = opts.height, cached = {} }
+        function w:tick()
+          if self.buf.dirty then
+            self.cached = self.buf.lines
+            self.buf.dirty = false
+          end
+        end
+        function w:close()
+          self.close_queued = true
+        end
+        function w:set_cursor(row)
+          self.cursor = row
+        end
+        w:tick()
+        windows[#windows + 1] = w
+        return w
+      end,
+    },
+  }
+  local buf = maki.ui.buf()
+  local initial = { { { "代码", { fg = "#bb9af7" } } } }
+  buf:set_lines(initial)
+  local panel = Layout.open_panel(buf, { width = 40, height = 8 })
+  panel:set_cursor(1)
+  eq(buf.dirty, false)
+  for _ = 1, 3 do
+    local old = windows[#windows]
+    panel:focus()
+    local current = windows[#windows]
+    assert(old.close_queued)
+    assert(current.buf ~= old.buf)
+    eq(current.cached, buf:get_lines())
+    eq(current.cursor, 1)
+    local updated = { { { "updated content", "selected" } } }
+    buf:set_lines(updated)
+    for _, window in ipairs(windows) do
+      window:tick()
+    end
+    eq(current.cached, updated)
+  end
+  panel:close()
+end)
+
 test("panel focus failures preserve cleanup ownership", function()
   for _, stage in ipairs({ "close", "open" }) do
     local f = panel_mock()
-    local panel = Layout.open_panel({}, { width = 40, height = 8 })
+    local panel = Layout.open_panel({
+      get_lines = function()
+        return {}
+      end,
+    }, { width = 40, height = 8 })
     local content = f.windows[2]
     if stage == "close" then
       content.failure = true

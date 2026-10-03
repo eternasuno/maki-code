@@ -603,7 +603,7 @@ test("native focus and event receiver follow review panes and editor", function(
   }) do
     h:key(entry[1])
     eq(s.inputwin, s[entry[2]])
-    eq(h.focused.buf, s[entry[3]])
+    eq(h:text(h.focused.buf), h:text(s[entry[3]]))
     eq(s.inputwin:recv(), nil)
   end
   local focused = h.focused
@@ -612,10 +612,10 @@ test("native focus and event receiver follow review panes and editor", function(
   h:key("1")
   h:key("c")
   eq(s.inputwin, s.rwin)
-  eq(h.focused.buf, s.rbuf)
+  eq(h:text(h.focused.buf), h:text(s.rbuf))
   h:key("<Esc>")
   eq(s.inputwin, s.fwin)
-  eq(h.focused.buf, s.fbuf)
+  eq(h:text(h.focused.buf), h:text(s.fbuf))
 end)
 
 test("empty submission does not close windows or inspect input", function(h)

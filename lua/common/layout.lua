@@ -153,9 +153,14 @@ function M.open_panel(buf, opts)
   local panel = { width = content.width, height = content.height }
   local cursor
   function panel:focus()
+    local replacement_buf = maki.ui.buf()
+    replacement_buf:set_lines(buf:get_lines())
     content:close()
     content_config.focus = true
-    content = maki.ui.open_win(buf, content_config)
+    content = maki.ui.open_win(replacement_buf, content_config)
+    buf:on("change", function()
+      replacement_buf:set_lines(buf:get_lines())
+    end)
     if cursor then
       content:set_cursor(cursor)
     end

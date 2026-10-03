@@ -203,6 +203,15 @@ function Host.new()
             end
           end
           self.content = lines
+          if self.change then
+            self.change()
+          end
+        end
+        function b:get_lines()
+          return self.content
+        end
+        function b:on(event, callback)
+          self[event] = callback
         end
         function b:len()
           return #self.content
