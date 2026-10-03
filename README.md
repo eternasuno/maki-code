@@ -13,7 +13,7 @@ Both UIs use kanban-style single-line panel borders with a one-column gap betwee
 
 Both file trees are collapsible and compress single-directory chains such as `src/foo/bar/`. `/code` lists tracked and non-ignored untracked files using `git ls-files --cached --others --exclude-standard`, scoped to the current directory, excluding tracked paths reported by `git ls-files --deleted`. Deleted files disappear when reopening `/code` or refreshing with `r`. It does not filter by extension: configuration and other text files are also available. Outside a Git working tree, it shows an explicit error.
 
-Mouse-wheel and touchpad scrolling are handled by Maki for the focused pane when the pointer is inside it (requires terminal mouse-event support). Select Source with `3` in `/code`, or Diff with `4` in `/review`, before scrolling there. Scrolling moves the viewport, not the selected source line.
+Mouse-wheel and touchpad scrolling are handled by Maki for the focused pane when the pointer is inside it (requires terminal mouse-event support). Select Source with `3` in `/code`, or Diff with `4` in `/review`, before scrolling there. Scrolling moves the viewport, not the selected source line. Pane switches transfer native focus by recreating only the destination content window, because the host has no focus-switch API. Buffers and comments are retained; the destination viewport returns to its selected row.
 
 ## Key bindings
 

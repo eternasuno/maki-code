@@ -626,6 +626,31 @@ local function panel_mock()
   return f
 end
 
+test("panel focus failures preserve cleanup ownership", function()
+  for _, stage in ipairs({ "close", "open" }) do
+    local f = panel_mock()
+    local panel = Layout.open_panel({}, { width = 40, height = 8 })
+    local content = f.windows[2]
+    if stage == "close" then
+      content.failure = true
+    else
+      maki.ui.open_win = function()
+        error("replacement unavailable")
+      end
+    end
+    eq(
+      pcall(function()
+        panel:focus()
+      end),
+      false
+    )
+    eq(#f.windows, 2)
+    content.failure = false
+    panel:close()
+    eq(f.windows[1].closes, 1)
+  end
+end)
+
 test("panel config compares content and snapshots mutable footer", function()
   local f = panel_mock()
   local footer = { { "q", "quit" } }

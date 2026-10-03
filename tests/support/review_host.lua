@@ -240,6 +240,8 @@ function Host.new()
           end
         end
         function w:recv()
+          assert(not self.closed, "Cannot receive events on closed window")
+          assert(self == h.focused, "Events must be received from the natively focused window")
           if h.recv_throw then
             error("recv panic")
           end

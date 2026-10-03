@@ -75,6 +75,15 @@ function Host.new(paths, sources)
     local content = f.windows[#f.windows]
     content.frame = f.windows[#f.windows - 1]
     panels[opts.title:match("^%s*(.-)%s*$")] = content
+    local focus = panel.focus
+    function panel:focus()
+      focus(self)
+      local previous = content
+      content = f.windows[#f.windows]
+      content.frame = previous.frame
+      content.config = previous.config
+      panels[opts.title:match("^%s*(.-)%s*$")] = content
+    end
     local set_config = panel.set_config
     function panel:set_config(config)
       content.config = config
@@ -300,6 +309,7 @@ function Host.new(paths, sources)
         end
         function win:recv()
           assert(not self.closed, "Cannot receive events on closed window")
+          assert(self == f.focused, "Events must be received from the natively focused window")
           while true do
             local event = table.remove(f.queue, 1)
             if type(event) == "function" then

@@ -593,6 +593,31 @@ for _, draft in ipairs({ "", "existing draft", "日本語 😀" }) do
   end)
 end
 
+test("native focus and event receiver follow review panes and editor", function(h)
+  local s = h:open()
+  for _, entry in ipairs({
+    { "2", "cwin", "cbuf" },
+    { "3", "mwin", "mbuf" },
+    { "1", "fwin", "fbuf" },
+    { "4", "rwin", "rbuf" },
+  }) do
+    h:key(entry[1])
+    eq(s.inputwin, s[entry[2]])
+    eq(h.focused.buf, s[entry[3]])
+    eq(s.inputwin:recv(), nil)
+  end
+  local focused = h.focused
+  h:key("j")
+  eq(h.focused, focused)
+  h:key("1")
+  h:key("c")
+  eq(s.inputwin, s.rwin)
+  eq(h.focused.buf, s.rbuf)
+  h:key("<Esc>")
+  eq(s.inputwin, s.fwin)
+  eq(h.focused.buf, s.fbuf)
+end)
+
 test("empty submission does not close windows or inspect input", function(h)
   h:open()
   eq(h:key("s"), true)
@@ -621,7 +646,7 @@ for _, failure in ipairs({ "snapshot", "snapshot panic", "second snapshot", "edi
     eq(h.draft, "")
     assert(s.fwin and s.rwin)
     contains(last_flash(h), "Failed to fill chat input")
-    eq(h.counts.open, failure:find("snapshot", 1, true) and failure ~= "second snapshot" and 9 or 18)
+    eq(h.counts.open, failure:find("snapshot", 1, true) and failure ~= "second snapshot" and 11 or 20)
     h.input_fail, h.input_throw, h.input_fail_at, h.input_edit_fail, h.input_edit_throw = nil, nil, nil, nil, nil
     eq(h:key("s"), false)
     eq(#h.comments.store, 0)

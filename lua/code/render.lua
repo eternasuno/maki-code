@@ -32,6 +32,7 @@ local function open_windows(state)
     error("Cannot reopen code windows: previous windows could not be closed")
   end
   state.rendered = nil
+  state.inputwin = nil
   state.rootwin = Layout.open_root()
   local size = Layout.sizing(state.rootwin)
   state.rootwin:set_config({ row = size.row, col = size.col, anchor = "NW" })
@@ -67,6 +68,7 @@ local function open_windows(state)
     focus = true,
   })
   Layout.attach_root(state.fwin, state)
+  state.inputwin = state.fwin
   state.width, state.source_width = state.fwin.width, state.swin.width
   state.term = maki.ui.terminal_size()
 end
@@ -343,6 +345,11 @@ local function redraw(state)
           )
       )
     )
+  end
+  local inputwin = source_active and state.swin or (comments_active and state.mwin or state.fwin)
+  if state.inputwin ~= inputwin then
+    inputwin:focus()
+    state.inputwin = inputwin
   end
   state.rendered = {
     rows = state.rows,

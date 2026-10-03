@@ -23,14 +23,13 @@ local function layout(root)
   }
 end
 
--- Opens (or reopens) all panes. Only the Files window takes focus and
--- receives keys; the other windows are display-only.
 local function open_windows(state)
   M.close(state)
   if state.fwin or state.cwin or state.mwin or state.rwin or state.rootwin then
     error("Cannot reopen review windows: previous windows could not be closed")
   end
   state.render_signatures = {}
+  state.inputwin = nil
   state.rootwin = Layout.open_root()
   local L = layout(state.rootwin)
   state.rootwin:set_config({ row = L.row, col = L.col, anchor = "NW" })
@@ -71,6 +70,7 @@ local function open_windows(state)
     focus = true,
   })
   Layout.attach_root(state.fwin, state)
+  state.inputwin = state.fwin
   state.panel_lwidth, state.panel_rwidth = L.lw, L.rw
   state.lwidth = state.fwin.width
   state.rwidth = state.rwin.width

@@ -277,7 +277,7 @@ local function run_browser(state)
   redraw(state)
   local done = false
   while not done do
-    local event = state.fwin:recv()
+    local event = state.inputwin:recv()
     if not event or event.type == "close" then
       done = true
     elseif event.type == "resize" then

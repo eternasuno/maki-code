@@ -540,11 +540,11 @@ for _, mode in ipairs({ "submit_throw", "input_throw" }) do
     f:check(function()
       contains(f.flashes[#f.flashes], "Failed to fill chat input:")
       contains(f:text("Comments"), "retain")
-      eq(f.focused, f:win("Files"))
+      eq(f.focused, f:win("Source"))
       assert(not f:win("Files").closed)
       if mode == "submit_throw" then
-        eq(#f.windows, 14)
-        for i = 1, 7 do
+        eq(#f.windows, 16)
+        for i = 1, 8 do
           assert(f.windows[i].closed)
         end
       end
@@ -713,6 +713,36 @@ for _, case in ipairs(errors) do
   end)
 end
 
+test("native focus follows panes and inline editors without rebuilding on navigation", function()
+  local f = fixture()
+  for _, entry in ipairs({ { "3", "Source" }, { "2", "Comments" }, { "1", "Files" } }) do
+    f:key(entry[1])
+    f:check(function()
+      eq(f.focused, f:win(entry[2]))
+    end)
+  end
+  f:key("c")
+  f:check(function()
+    eq(f.focused, f:win("Source"))
+  end)
+  f:key("<Esc>")
+  f:check(function()
+    eq(f.focused, f:win("Files"))
+  end)
+  local source
+  f:key("3")
+  f:check(function()
+    source = f:win("Source")
+  end)
+  f:key("j")
+  f:check(function()
+    eq(f:win("Source"), source)
+    eq(f.focused, source)
+  end)
+  f:key("q")
+  f:run()
+end)
+
 test("Source soft wraps with original line navigation comments and resize", function()
   local long = string.rep("界ab  ", 30)
   local f = fixture(nil, { ["a.lua"] = long .. "\nsecond\n" })
@@ -803,8 +833,8 @@ test("resize recreates windows preserves editor and cleans up", function()
   end)
   f.queue[#f.queue + 1] = { type = "resize" }
   f:check(function()
-    eq(#f.windows, 14)
-    for i = 1, 7 do
+    eq(#f.windows, 16)
+    for i = 1, 8 do
       assert(f.windows[i].closed)
     end
     contains(f:text("Source"), "resize retained")

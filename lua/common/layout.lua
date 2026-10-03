@@ -130,7 +130,7 @@ function M.open_panel(buf, opts)
     zindex = 49,
   })
   local inset_x, inset_y = width >= 3 and 1 or 0, height >= 3 and 1 or 0
-  local ok, content = pcall(maki.ui.open_win, buf, {
+  local content_config = {
     width = width - 2 * inset_x,
     height = height - 2 * inset_y,
     row = (opts.row or 0) + inset_y,
@@ -142,7 +142,8 @@ function M.open_panel(buf, opts)
     focus = opts.focus,
     visible = opts.height > 0,
     zindex = 50,
-  })
+  }
+  local ok, content = pcall(maki.ui.open_win, buf, content_config)
   if not ok then
     pcall(function()
       frame:close()
@@ -150,10 +151,20 @@ function M.open_panel(buf, opts)
     error(content)
   end
   local panel = { width = content.width, height = content.height }
+  local cursor
+  function panel:focus()
+    content:close()
+    content_config.focus = true
+    content = maki.ui.open_win(buf, content_config)
+    if cursor then
+      content:set_cursor(cursor)
+    end
+  end
   function panel:recv(timeout)
     return content:recv(timeout)
   end
   function panel:set_cursor(row)
+    cursor = row
     return content:set_cursor(row)
   end
   function panel:set_config(next_config)

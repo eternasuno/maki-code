@@ -27,7 +27,7 @@ local function open_review()
     Browser.open(state)
     local running = true
     while running do
-      running = Browser.handle_event(state, state.fwin:recv())
+      running = Browser.handle_event(state, state.inputwin:recv())
     end
   end)
   if state then

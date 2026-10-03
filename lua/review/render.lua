@@ -212,6 +212,12 @@ function M.redraw(state)
   state.cwin:set_cursor(state.ccursor)
   state.mwin:set_cursor(state.mcursor)
   state.rwin:set_cursor(editor_row or state.dcursor)
+  local inputwin = diff_active and state.rwin
+    or ({ files = state.fwin, commits = state.cwin, comments = state.mwin })[state.pane]
+  if state.inputwin ~= inputwin then
+    inputwin:focus()
+    state.inputwin = inputwin
+  end
 end
 
 return M
