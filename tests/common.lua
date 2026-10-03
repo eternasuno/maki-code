@@ -575,7 +575,8 @@ local function panel_mock()
     ui = {
       buf = function()
         return {
-          set_lines = function()
+          set_lines = function(_, lines)
+            f.lines = lines
             f.renders = f.renders + 1
           end,
         }
@@ -691,6 +692,29 @@ test("panel focus failures preserve cleanup ownership", function()
     panel:close()
     eq(f.windows[1].closes, 1)
   end
+end)
+
+test("search title preserves combining marks and measures joined suffixes", function()
+  local f = panel_mock()
+  local function measure(text)
+    local normalized = text:gsub("👩‍💻", "中"):gsub("́", "")
+    maki.ui.display_width = nil
+    local width = Text.display_len(normalized)
+    maki.ui.display_width = measure
+    return width
+  end
+  maki.ui.display_width = measure
+  local panel = Layout.open_panel({}, { width = 40, height = 8 })
+  panel:set_config({ title = "éx", title_cursor = 1 })
+  eq(f.lines[1][3][1], "é")
+  maki.ui.display_width = measure
+  panel:set_config({ title = "a👩‍💻", title_cursor = 0 })
+  local width = 0
+  for _, span in ipairs(f.lines[1]) do
+    maki.ui.display_width = measure
+    width = width + Text.display_len(span[1])
+  end
+  eq(width, 40)
 end)
 
 test("panel config compares content and snapshots mutable footer", function()

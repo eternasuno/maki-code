@@ -291,19 +291,27 @@ local function redraw(state)
   if state.search_input or state.search_query ~= "" then
     files_title = files_title .. "/" .. display(state.search_query) .. " "
   end
-  local files_hints = state.search_input and { { "Enter", "keep" }, { "Esc", "clear" } }
+  local search_col = state.search_input and state.search_input.col
+  local files_hints = state.search_input
+      and { { "↑↓", "select" }, { "←→", "edit" }, { "Enter", "keep" }, { "Esc", "clear" } }
     or { { "/", "search" }, { "Enter", "open" }, { "c", "comment" }, { "e", "edit" }, { "r", "refresh" } }
   if
     previous.pane ~= state.pane
     or previous.editor ~= editor
     or previous.search_input ~= state.search_input
     or previous.query ~= state.search_query
+    or previous.search_col ~= search_col
     or previous.rows ~= state.rows
     or previous.width ~= state.width
   then
-    state.fwin:set_config(
-      Layout.panel_config(state.panel_width, files_title, files_active, files_active and files_hints or {})
-    )
+    local config = Layout.panel_config(state.panel_width, files_title, files_active, files_active and files_hints or {})
+    config.title_cursor = false
+    if state.search_input then
+      local prefix = "[1] Files (" .. #state.filtered_paths .. ") /"
+      config.title = prefix .. display(state.search_query)
+      config.title_cursor = #prefix + #display(state.search_query:sub(1, search_col))
+    end
+    state.fwin:set_config(config)
   end
   if
     previous.pane ~= state.pane
@@ -370,6 +378,7 @@ local function redraw(state)
     editor_line = editor_line,
     editor_col = editor_col,
     search_input = state.search_input,
+    search_col = search_col,
     query = state.search_query,
   }
 end

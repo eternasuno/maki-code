@@ -95,6 +95,11 @@ local function load_source(state, path, line)
 end
 local function flatten_tree(state)
   local collapsed = {}
+  if state.search_query ~= "" then
+    state.effective_collapsed = collapsed
+    state.rows = state.all_rows
+    return
+  end
   for _, row in ipairs(state.all_rows) do
     local path = row.dir
     while path do
@@ -117,30 +122,53 @@ end
 local function index_paths(state, paths)
   state.search_entries = {}
   for _, path in ipairs(paths) do
-    state.search_entries[#state.search_entries + 1] = { path = path, name_lower = path:match("[^/]+$"):lower() }
+    state.search_entries[#state.search_entries + 1] = { path = path, path_lower = path:lower() }
   end
+end
+
+local function matches(path, query, characters)
+  if path:find(query, 1, true) then
+    return true
+  end
+  local start = 1
+  for _, character in ipairs(characters) do
+    local _, stop = path:find(character, start, true)
+    if not stop then
+      return false
+    end
+    start = stop + 1
+  end
+  return true
 end
 
 local function apply_search(state, query)
   local selected_row = state.rows and state.rows[state.file_cursor]
   local selected_path = selected_row and (selected_row.dir or state.filtered_paths[selected_row.idx])
   state.search_query, state.filtered_paths = query, {}
-  local lower = query:lower()
+  local lower, characters = query:lower(), {}
+  for character in lower:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
+    characters[#characters + 1] = character
+  end
   for _, entry in ipairs(state.search_entries) do
-    if entry.name_lower:find(lower, 1, true) then
+    if matches(entry.path_lower, lower, characters) then
       state.filtered_paths[#state.filtered_paths + 1] = entry.path
     end
   end
   state.tree = Tree.build_tree(state.filtered_paths)
   state.all_rows = Tree.flatten(state.tree)
   flatten_tree(state)
-  state.file_cursor = clamp(state.file_cursor, #state.rows)
+  state.file_cursor = 1
+  local first_file
   for index, row in ipairs(state.rows) do
+    if row.idx and not first_file then
+      first_file = index
+    end
     if (row.dir or state.filtered_paths[row.idx]) == selected_path then
       state.file_cursor = index
-      break
+      return row
     end
   end
+  state.file_cursor = first_file or 1
   return state.rows[state.file_cursor]
 end
 

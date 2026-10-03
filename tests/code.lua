@@ -1268,5 +1268,61 @@ test("Source refresh and external edit each read displayed file once", function(
   f:run()
 end)
 
+test("search cursor moves without rebuilding results or repainting content", function()
+  local f = fixture({ "目录/comments.lua" })
+  local builds, reads, writes, frames
+  local function cursor(expected)
+    local win = f:win("Files")
+    local row, cells, highlighted = win.frame.buf.content[1], 0, nil
+    for _, span in ipairs(row) do
+      cells = cells + Utils.display_len(span[1])
+      if type(span[2]) == "table" and span[2].bg then
+        highlighted = span[1]
+      end
+    end
+    eq(cells, win.frame.width)
+    eq(highlighted, expected)
+  end
+  f:key("/")
+  f:paste("目录comment")
+  f:check(function()
+    cursor(" ")
+    builds, reads = f.tree_builds, f.reads
+    writes = f:win("Files").buf.set_calls
+    frames = f:win("Files").frame.buf.set_calls
+  end)
+  f:key("<Home>")
+  f:check(function()
+    cursor("目")
+    eq(f.tree_builds, builds)
+    eq(f.reads, reads)
+    eq(f:win("Files").buf.set_calls, writes)
+    assert(f:win("Files").frame.buf.set_calls > frames)
+  end)
+  f:key("<Right>")
+  f:check(function()
+    cursor("录")
+  end)
+  f:key("<End>")
+  f:paste(string.rep("中文abcdef", 20))
+  f:check(function()
+    cursor(" ")
+  end)
+  f:key("<Left>")
+  f:check(function()
+    cursor("f")
+  end)
+  f:key("<Home>")
+  f:check(function()
+    cursor("目")
+  end)
+  f:key("<CR>")
+  f:check(function()
+    cursor(nil)
+  end)
+  f:key("q")
+  f:run()
+end)
+
 print(string.format("code: %d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

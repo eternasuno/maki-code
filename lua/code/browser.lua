@@ -116,6 +116,14 @@ local function handle_key(state, key)
     elseif key == "<Esc>" or key == "<C-c>" then
       state.search_input = nil
       apply_search(state, "")
+    elseif key == "<Up>" then
+      navigate(state, -1)
+    elseif key == "<Down>" then
+      navigate(state, 1)
+    elseif key == "<PageUp>" then
+      navigate(state, -math.max(1, state.heights.files - 2))
+    elseif key == "<PageDown>" then
+      navigate(state, math.max(1, state.heights.files - 2))
     else
       local before = state.search_input:value()
       state.search_input:handle_key(key)
@@ -182,7 +190,7 @@ local function handle_key(state, key)
   elseif key == "h" or key == "<Left>" then
     if state.pane == "source" and key == "<Left>" then
       state.pane, state.anchor = "files", nil
-    elseif state.pane == "files" then
+    elseif state.pane == "files" and state.search_query == "" then
       local row = state.rows[state.file_cursor]
       if row and row.dir then
         if not state.effective_collapsed[row.dir] then
@@ -205,6 +213,9 @@ local function handle_key(state, key)
     if state.pane == "files" then
       local row = state.rows[state.file_cursor]
       if row and row.dir then
+        if state.search_query ~= "" then
+          return false
+        end
         if state.effective_collapsed[row.dir] then
           local path = row.dir
           while path do

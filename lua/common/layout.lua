@@ -78,6 +78,46 @@ function M.panel_config(width, title, active, footer)
   }
 end
 
+local function input_title(text, col, width, style)
+  local before, after = text:sub(1, col), text:sub(col + 1)
+  local cursor = after:match("^[%z\1-\127\194-\244][\128-\191]*") or " "
+  after = after:sub(#cursor + 1)
+  local cursor_width = display_len(cursor)
+  if cursor_width == 0 then
+    local previous = before:match("[%z\1-\127\194-\244][\128-\191]*$")
+    if previous then
+      before = before:sub(1, #before - #previous)
+      cursor = previous .. cursor
+    else
+      cursor = " " .. cursor
+    end
+    cursor_width = display_len(cursor)
+  end
+  if cursor_width > width then
+    cursor, cursor_width = " ", 1
+  end
+  if display_len(before) + cursor_width > width then
+    before =
+      Text.fit_path(before, math.max(0, width - cursor_width - math.min(display_len(after), math.floor(width / 2))))
+  end
+  local remaining = width - display_len(before) - cursor_width
+  local suffix = ""
+  for character in after:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
+    local next_suffix = suffix .. character
+    if display_len(next_suffix) > remaining then
+      break
+    end
+    suffix = next_suffix
+  end
+  remaining = remaining - display_len(suffix)
+  return {
+    { "┌ ", style },
+    { before, style },
+    { cursor, { fg = "#1a1b26", bg = style.fg } },
+    { suffix .. " " .. string.rep("─", remaining) .. "┐", style },
+  }
+end
+
 function M.open_panel(buf, opts)
   local width, height = math.max(opts.width, 1), math.max(opts.height, 1)
   local frame_buf = maki.ui.buf()
@@ -107,6 +147,9 @@ function M.open_panel(buf, opts)
       footer[#footer + 1] = pair[1] .. " " .. pair[2] .. " "
     end
     local lines = { edge("┌", "┐", title, style) }
+    if config.title_cursor and width >= 5 then
+      lines[1] = input_title(config.title, config.title_cursor, width - 4, style)
+    end
     for _ = 2, height - 1 do
       lines[#lines + 1] = { { width == 1 and "│" or "│" .. string.rep(" ", width - 2) .. "│", style } }
     end
@@ -174,7 +217,7 @@ function M.open_panel(buf, opts)
   end
   function panel:set_config(next_config)
     local changed = false
-    for _, key in ipairs({ "title", "active" }) do
+    for _, key in ipairs({ "title", "active", "title_cursor" }) do
       if next_config[key] ~= nil and next_config[key] ~= config[key] then
         config[key] = next_config[key]
         changed = true
