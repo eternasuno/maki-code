@@ -13,9 +13,7 @@ local save_editor, submit = CodeComments.save_editor, CodeComments.submit
 local open_windows, close_windows, redraw = Render.open_windows, Render.close_windows, Render.redraw
 local M = {}
 
-local function display(text)
-  return Text.sanitize_utf8(text):gsub("[%z\1-\8\11\12\14-\31\127]", "?")
-end
+local display = Text.display
 
 local function clamp(n, count)
   return math.max(1, math.min(n, count))

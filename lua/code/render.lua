@@ -6,9 +6,7 @@ local store = require("code.comments").store
 local first_directory = Files.first_directory
 local M = {}
 
-local function display(text)
-  return Text.sanitize_utf8(text):gsub("[%z\1-\8\11\12\14-\31\127]", "?")
-end
+local display = Text.display
 
 local function clamp(n, count)
   return math.max(1, math.min(n, count))

@@ -101,6 +101,35 @@ test("changes parse NUL rename binary and untracked root-relative paths", functi
   check_commands()
 end)
 
+test("working tree queries sort exactly once after merging paths", function()
+  local sort, sorts = table.sort, 0
+  rawset(table, "sort", function(values, compare)
+    sorts = sorts + 1
+    return sort(values, compare)
+  end)
+  local ok, err = pcall(function()
+    for _, entries in ipairs({
+      { "", "", "", "" },
+      { "M\0z\0A\0a\0", "1\t0\tz\0" .. "2\t0\ta\0", "", "az" },
+      { "", "", "z\0a\0", "az" },
+      { "M\0z\0A\0a\0", "1\t0\tz\0" .. "2\t0\ta\0", "b\0a\0", "abz" },
+    }) do
+      mock({ entries[1] }, { entries[2] }, { entries[3] })
+      sorts = 0
+      local changes = assert(Git.changes(root))
+      eq(sorts, 1)
+      local paths = {}
+      for _, change in ipairs(changes) do
+        paths[#paths + 1] = change.path
+      end
+      eq(table.concat(paths), entries[4])
+      check_commands()
+    end
+  end)
+  rawset(table, "sort", sort)
+  assert(ok, err)
+end)
+
 test("ordinary paths preserve tabs newlines quotes and backslashes", function()
   mock({ "A\0" .. untracked .. "\0" }, { "10\t0\t" .. untracked .. "\0" }, { "" })
   local changes = assert(Git.changes(root))
@@ -158,8 +187,16 @@ end)
 
 test("commit changes retain commit and both rename paths", function()
   local sha = "abc'123"
-  mock({ names }, { stats })
+  mock({ "A\0z-last\0" .. names }, { "4\t0\tz-last\0" .. stats })
   local changes = assert(Git.commit_changes(root, sha))
+  eq(#changes, 3)
+  eq(changes[1].path, new_path)
+  eq(changes[2].path, binary)
+  eq(changes[3].path, "z-last")
+  for _, change in ipairs(changes) do
+    eq(change.commit, sha)
+  end
+  eq(changes[3].adds, 4)
   local rename = find(changes, new_path)
   eq(rename.commit, sha)
   eq(rename.old_path, old_path)

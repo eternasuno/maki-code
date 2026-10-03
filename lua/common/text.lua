@@ -47,6 +47,10 @@ function M.sanitize_utf8(s)
   return table.concat(chars(s))
 end
 
+function M.display(text)
+  return M.sanitize_utf8(text):gsub("[%z\1-\8\11\12\14-\31\127]", "?")
+end
+
 local function cell_width(c)
   local b = c:byte(1)
   local cp = b
@@ -225,16 +229,17 @@ function M.fit_path(path, max)
   if max == 0 then
     return ""
   end
-  local parts, tail, cells = chars(path), {}, M.display_len("…")
+  local parts, cells = chars(path), M.display_len("…")
+  local start = #parts + 1
   for i = #parts, 1, -1 do
     local n = M.display_len(parts[i])
     if cells + n > max then
       break
     end
-    table.insert(tail, 1, parts[i])
+    start = i
     cells = cells + n
   end
-  return "…" .. table.concat(tail)
+  return "…" .. table.concat(parts, "", start)
 end
 
 return M

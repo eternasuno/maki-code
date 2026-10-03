@@ -11,17 +11,15 @@ local comment_count = ReviewComments.count
 local STATUS_STYLE = { M = "warning", A = "diff_new", D = "diff_old", R = "accent", ["?"] = "diff_new" }
 
 -- Renders a change list as a collapsible directory tree into `buf`.
--- row_map values: number (index into `changes`) or { dir = path }.
 local function render_change_list(state, buf, changes, cursor, active, empty_msg, collapsed)
   local width = math.max(state.lwidth, 20)
-  local lines, row_map = {}, {}
+  local lines = {}
   if #changes == 0 then
     lines[#lines + 1] = { { empty_msg, "dim" } }
   end
 
-  local function push(spans, val)
+  local function push(spans)
     lines[#lines + 1] = spans
-    row_map[#lines] = val
     if #lines == cursor then
       if active and not state.editor then
         lines[#lines] = pad_spans(restyle(spans, "selected"), width, "selected")
@@ -32,20 +30,6 @@ local function render_change_list(state, buf, changes, cursor, active, empty_msg
         lines[#lines] = marked
       end
     end
-  end
-
-  -- Total files and review comments under a directory node.
-  local function dir_stats(d)
-    local nfiles = #d.files
-    for _, sub in ipairs(d.dorder) do
-      nfiles = nfiles + dir_stats(sub)
-    end
-    -- A compressed row represents all directories in its name chain.
-    local suffix = d.name:match("^[^/]+(/.*)$") or ""
-    local path = d.path:sub(1, #d.path - #suffix)
-    local commit = changes[1] and changes[1].commit
-    local ncoms = ReviewComments.count_under(path, commit)
-    return nfiles, ncoms
   end
 
   local function emit_file(f, depth)
@@ -74,13 +58,14 @@ local function render_change_list(state, buf, changes, cursor, active, empty_msg
       right,
       ch.untracked and "diff_new" or (ch.binary and "dim" or "accent"),
     }
-    push(spans, f.idx)
+    push(spans)
   end
 
   local function emit_dir(d, depth)
     local isc = collapsed[d.path]
-    local nfiles, ncoms = dir_stats(d)
-    local right = isc and (nfiles .. " files") or ""
+    local commit = changes[1] and changes[1].commit
+    local ncoms = ReviewComments.count_under(d.start_path, commit)
+    local right = isc and (d.nfiles .. " files") or ""
     local badge = ncoms > 0 and (COMMENT_MARK .. ncoms .. " ") or ""
     local prefix = " " .. string.rep("  ", depth) .. (isc and "▸ " or "▾ ")
     local avail = width - display_len(prefix) - display_len(right) - display_len(badge) - 2
@@ -95,40 +80,30 @@ local function render_change_list(state, buf, changes, cursor, active, empty_msg
     if right ~= "" then
       spans[#spans + 1] = { right, "dim" }
     end
-    push(spans, { dir = d.path })
+    push(spans)
   end
 
   local prepared = state.list_cache[changes]
-  local tree = prepared.tree
-  local dirs = {}
-  local function collect(node)
-    for _, d in ipairs(node.dorder) do
-      dirs[d.path] = d
-      collect(d)
-    end
-  end
-  collect(tree)
   for _, row in ipairs(prepared.rows) do
     if row.dir then
-      emit_dir(dirs[row.dir], row.depth)
+      emit_dir(prepared.dirs[row.dir], row.depth)
     else
       emit_file(row, row.depth)
     end
   end
 
   buf:set_lines(lines)
-  return row_map
 end
 
--- Renders the commit list into cbuf. Returns row_map (row -> commit idx).
+-- Renders the commit list into cbuf.
 local function render_commit_list(state)
   local width = math.max(state.lwidth, 20)
   local active = state.pane == "commits" and not state.editor
-  local lines, row_map = {}, {}
+  local lines = {}
   if #state.commits == 0 then
     lines[#lines + 1] = { { "  No commits.", "dim" } }
   end
-  for i, cm in ipairs(state.commits) do
+  for _, cm in ipairs(state.commits) do
     local sha = sanitize_utf8(cm.sha or "")
     local when = sanitize_utf8(cm.when or ""):gsub(" ago$", "")
     local subject = sanitize_utf8(cm.subject or "")
@@ -143,7 +118,6 @@ local function render_commit_list(state)
     pad_spans(spans, width - display_len(when) - 1)
     spans[#spans + 1] = { when, "dim" }
     lines[#lines + 1] = spans
-    row_map[#lines] = i
     if #lines == state.ccursor then
       if active then
         lines[#lines] = pad_spans(restyle(spans, "selected"), width, "selected")
@@ -155,19 +129,18 @@ local function render_commit_list(state)
     end
   end
   state.cbuf:set_lines(lines)
-  return row_map
 end
 
--- Renders all review comments into mbuf. Returns row_map (row -> comment idx).
+-- Renders all review comments into mbuf.
 local function render_comment_list(state)
   local width = math.max(state.lwidth, 20)
   local active = state.pane == "comments" and not state.editor
-  local lines, row_map = {}, {}
+  local lines = {}
   if #comments == 0 then
     lines[#lines + 1] = { { "  No comments yet.", "dim" } }
     lines[#lines + 1] = { { "  Press c on a path or diff line.", "dim" } }
   end
-  for i, c in ipairs(comments) do
+  for _, c in ipairs(comments) do
     local kind = Comments.kind(c)
     local loc = Comments.location(c)
     if kind ~= "line" then
@@ -190,7 +163,6 @@ local function render_comment_list(state)
       spans[#spans + 1] = { " " .. preview, "dim" }
     end
     lines[#lines + 1] = spans
-    row_map[#lines] = i
     if #lines == state.mcursor then
       if active then
         lines[#lines] = pad_spans(restyle(spans, "selected"), width, "selected")
@@ -202,7 +174,6 @@ local function render_comment_list(state)
     end
   end
   state.mbuf:set_lines(lines)
-  return row_map
 end
 
 local M = {}
@@ -211,7 +182,20 @@ function M.prepare(state)
   local function changes_map(changes, collapsed, revision)
     local cached = state.list_cache[changes]
     if not cached then
-      cached = { tree = Tree.build_tree(changes) }
+      cached = { tree = Tree.build_tree(changes), dirs = {} }
+      local function prepare_dir(node)
+        node.nfiles = #node.files
+        for _, d in ipairs(node.dorder) do
+          prepare_dir(d)
+          node.nfiles = node.nfiles + d.nfiles
+        end
+        if node.path then
+          local suffix = node.name:match("^[^/]+(/.*)$") or ""
+          node.start_path = node.path:sub(1, #node.path - #suffix)
+          cached.dirs[node.path] = node
+        end
+      end
+      prepare_dir(cached.tree)
       state.list_cache[changes] = cached
     end
     if cached.collapsed ~= collapsed or cached.revision ~= revision then

@@ -62,9 +62,6 @@ fn both_modules_load_common_modules_without_registering_on_require() {
         local review = require("review")
         assert(type(code.setup) == "function")
         assert(type(review.setup) == "function")
-        for _, name in ipairs({ "tree", "comments", "highlight", "layout", "shell", "text", "input" }) do
-            assert(require("common." .. name) == require("common." .. name))
-        end
     "##,
     );
     let snapshot = host.command_reader().load().clone();

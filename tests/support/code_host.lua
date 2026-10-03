@@ -303,16 +303,6 @@ function Host.new(paths, sources)
         function win:set_config(config)
           self.config = config
         end
-        function win:hide()
-          self.hidden = true
-        end
-        function win:show()
-          self.hidden = false
-          if self.opts.focus then
-            f.focused = self
-          end
-          f.last_shown = self
-        end
         function win:close()
           self.closed = true
         end

@@ -277,15 +277,12 @@ local function open_comment_editor(state)
   if existing then
     input:insert_text(existing.text)
     label = line_range_label(existing)
-    from, to = nil, nil -- editing keeps the original range
   else
     label = line_range_label(record)
   end
 
   state.editor = {
     input = input,
-    from = from,
-    to = to,
     at = at,
     existing_idx = existing_idx,
     label = label,

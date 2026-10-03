@@ -18,6 +18,10 @@ local function fields(raw)
   return out
 end
 
+local function compare_paths(a, b)
+  return a.path < b.path
+end
+
 local function parse_changes(names, stats, commit)
   local records, err = fields(names)
   if not records then
@@ -71,9 +75,6 @@ local function parse_changes(names, stats, commit)
       return nil, "missing Git numstat record"
     end
   end
-  table.sort(changes, function(a, b)
-    return a.path < b.path
-  end)
   return changes, seen
 end
 
@@ -125,9 +126,7 @@ function M.changes(root)
       changes[#changes + 1] = { path = path, status = "?", adds = 0, dels = 0, untracked = true }
     end
   end
-  table.sort(changes, function(a, b)
-    return a.path < b.path
-  end)
+  table.sort(changes, compare_paths)
   return changes
 end
 
@@ -157,6 +156,7 @@ function M.commit_changes(root, sha)
   if not changes then
     return nil, err
   end
+  table.sort(changes, compare_paths)
   return changes
 end
 

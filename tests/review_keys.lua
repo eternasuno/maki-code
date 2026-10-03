@@ -158,6 +158,60 @@ test("compressed directory toggles flatten only and preserve pane", function(h)
   eq(s.change.path, "src/deep/b.lua")
 end)
 
+test("deep directory redraw reuses subtree counts and keeps comment badges live", function(h)
+  h.paths = {}
+  local path = "root"
+  for i = 1, 64 do
+    h.paths[#h.paths + 1] = path .. "/file.lua"
+    path = path .. "/level" .. i
+  end
+  h.paths[#h.paths + 1] = path .. "/tail/end.lua"
+  local s = h:open()
+  h:key("g")
+  h:key("l")
+  contains(h:text(s.fbuf), "65 files")
+  local builds, flattens = h.counts.build, h.counts.flatten
+  local children = {}
+  local function block_walk(node)
+    children[node] = node.dorder
+    for _, child in ipairs(node.dorder) do
+      block_walk(child)
+    end
+    node.dorder = setmetatable({}, {
+      __index = function()
+        error("redraw walked cached directory children")
+      end,
+    })
+  end
+  block_walk(s.list_cache[s.working_changes].tree)
+  Comments.add(h.comments.store, { target = { kind = "dir", path = path }, text = "ancestor" })
+  h.browser.redraw(s)
+  contains(h:text(s.fbuf), "● 1")
+  contains(h:text(s.fbuf), "65 files")
+  Comments.remove(h.comments.store, 1)
+  h.browser.redraw(s)
+  assert(not h:text(s.fbuf):find("●", 1, true))
+  eq(h.counts.build, builds)
+  eq(h.counts.flatten, flattens)
+  for node, dorder in pairs(children) do
+    node.dorder = dorder
+  end
+  h:key("l")
+  for row, selected in ipairs(s.frow_map) do
+    if type(selected) == "table" and selected.dir == path .. "/tail" then
+      s.fcursor = row
+      break
+    end
+  end
+  eq(s.frow_map[s.fcursor].dir, path .. "/tail")
+  h:key("l")
+  contains(h:text(s.fbuf), "1 files")
+  Comments.add(h.comments.store, { target = { kind = "dir", path = path }, text = "ancestor" })
+  h.browser.redraw(s)
+  contains(h:text(s.fbuf), "● 1")
+  eq(h.counts.build, builds)
+end)
+
 test("canonical page home end arrows navigate real row maps", function(h)
   local s = h:open()
   h:key("<Down>")
