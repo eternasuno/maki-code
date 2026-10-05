@@ -5,5 +5,8 @@
     stylua
   ];
   languages.lua.enable = true;
-  languages.rust.enable = true;
+  languages.rust = {
+    enable = true;
+    channel = "stable";
+  };
 }
