@@ -451,6 +451,28 @@ test("line range anchors snapshot and existing edit remain stable", function(h)
   contains(h.comments.prompt(), "Verify the actual current workspace")
 end)
 
+test("large diff snapshots cap snippets while retaining complete ranges", function(h)
+  for _, with_hunk in ipairs({ true, false }) do
+    local dlines = {}
+    if with_hunk then
+      dlines[#dlines + 1] = { kind = "hunk", text = "@@ -1 +1 @@" }
+    end
+    for i = 1, 100 do
+      dlines[#dlines + 1] = { kind = "add", new_ln = i, text = "line " .. i }
+    end
+    local comment = h.comments.make({ path = "large.lua" }, dlines, with_hunk and 2 or 1, #dlines, "large range")
+    local _, count = comment.snippet:gsub("\n", "")
+    eq(count, 79)
+    eq(comment.new_start, 1)
+    eq(comment.new_end, 100)
+    contains(comment.snippet, "line 1")
+    assert(not comment.snippet:find("line 100", 1, true))
+    if with_hunk then
+      contains(comment.snippet, "@@ -1 +1 @@")
+    end
+  end
+end)
+
 test("old-side comments are separate from new-side anchors and commits", function(h)
   local s = h:open()
   h:key("4")

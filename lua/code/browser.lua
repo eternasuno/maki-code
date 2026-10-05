@@ -275,13 +275,6 @@ local function run_browser(state)
   state.file_cursor, state.comment_cursor, state.line = 1, 1, 1
   state.fbuf, state.mbuf, state.sbuf = maki.ui.buf(), maki.ui.buf(), maki.ui.buf()
   apply_search(state, "")
-  for index, row in ipairs(state.rows) do
-    if row.idx then
-      state.file_cursor = index
-      break
-    end
-  end
-  preview_selected(state)
   open_windows(state)
   redraw(state)
   local done = false

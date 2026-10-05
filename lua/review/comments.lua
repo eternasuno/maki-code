@@ -35,13 +35,14 @@ local function make_comment(change, dlines, from, to, text)
   end
   local lo, hi = math.max(from - 2, 1), math.min(to + 2, #dlines)
   for i = lo, hi do
+    if #snippet >= 80 then
+      break
+    end
     local dl = dlines[i]
     if dl.kind ~= "hunk" then
       local prefix = dl.kind == "add" and "+" or dl.kind == "del" and "-" or " "
       local marked = (i >= from and i <= to) and "  <<< comment applies here" or ""
-      if #snippet < 80 then
-        snippet[#snippet + 1] = prefix .. dl.text .. marked
-      end
+      snippet[#snippet + 1] = prefix .. dl.text .. marked
     end
   end
   c.snippet = table.concat(snippet, "\n")

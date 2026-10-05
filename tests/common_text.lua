@@ -1,33 +1,8 @@
 local Text = require("common.text")
 local function chars(s)
-  local out, i = {}, 1
-  while i <= #s do
-    local b = s:byte(i)
-    local n = b < 128 and 1
-      or (b >= 194 and b <= 223 and 2)
-      or (b >= 224 and b <= 239 and 3)
-      or (b >= 240 and b <= 244 and 4)
-      or 0
-    local valid = n > 0 and i + n - 1 <= #s
-    for j = i + 1, i + n - 1 do
-      local c = s:byte(j)
-      if not c or c < 128 or c > 191 then
-        valid = false
-      end
-    end
-    local second = s:byte(i + 1)
-    if n == 3 and ((b == 224 and second and second < 160) or (b == 237 and second and second >= 160)) then
-      valid = false
-    end
-    if n == 4 and ((b == 240 and second and second < 144) or (b == 244 and second and second >= 144)) then
-      valid = false
-    end
-    if valid then
-      out[#out + 1] = s:sub(i, i + n - 1)
-      i = i + n
-    else
-      i = i + 1
-    end
+  local out = {}
+  for c in s:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
+    out[#out + 1] = c
   end
   return out
 end
@@ -134,6 +109,17 @@ return function(test, eq)
       end
     end
     maki = nil
+  end)
+  test("wrap sanitizes input once", function()
+    local sanitize, calls = Text.sanitize_utf8, 0
+    Text.sanitize_utf8 = function(s)
+      calls = calls + 1
+      return sanitize(s)
+    end
+    local ok, err = pcall(Text.wrap, "hello world", 4)
+    Text.sanitize_utf8 = sanitize
+    assert(ok, err)
+    eq(calls, 1)
   end)
   test("wrap measurement work and first-line short circuit", function()
     local calls, bytes = 0, 0

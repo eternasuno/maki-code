@@ -273,13 +273,10 @@ local function open_comment_editor(state)
   local input = TextInput.new()
   local existing, existing_idx = comment_at(state.change, state.dlines[to])
   local record = existing or make_comment(state.change, state.dlines, from, to, "")
-  local label
   if existing then
     input:insert_text(existing.text)
-    label = line_range_label(existing)
-  else
-    label = line_range_label(record)
   end
+  local label = line_range_label(record)
 
   state.editor = {
     input = input,

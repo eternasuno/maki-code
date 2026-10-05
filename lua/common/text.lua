@@ -94,8 +94,7 @@ local function cell_width(c)
   return 1
 end
 
-function M.display_len(s)
-  s = M.sanitize_utf8(s or "")
+local function valid_display_len(s)
   if maki and maki.ui and maki.ui.display_width then
     local ok, n = pcall(maki.ui.display_width, s)
     if ok and type(n) == "number" then
@@ -103,21 +102,25 @@ function M.display_len(s)
     end
   end
   local n = 0
-  for _, c in ipairs(chars(s)) do
+  chars(s, function(c)
     n = n + cell_width(c)
-  end
+  end)
   return n
 end
 
+function M.display_len(s)
+  return valid_display_len(M.sanitize_utf8(s or ""))
+end
+
 local function wrap_line(raw, width)
-  local raw_width = M.display_len(raw)
+  local raw_width = valid_display_len(raw)
   if raw == "" or raw_width <= width then
     return { raw }
   end
   local parts = chars(raw)
   local widths, remaining = {}, 0
   for i, c in ipairs(parts) do
-    widths[i] = M.display_len(c)
+    widths[i] = valid_display_len(c)
     remaining = remaining + widths[i]
   end
   -- Native width may account for clusters rather than summing scalar widths.
@@ -126,7 +129,7 @@ local function wrap_line(raw, width)
   while start <= #parts do
     local remainder_width = remaining
     if not additive then
-      remainder_width = M.display_len(table.concat(parts, "", start))
+      remainder_width = valid_display_len(table.concat(parts, "", start))
     end
     if remainder_width <= width then
       lines[#lines + 1] = table.concat(parts, "", start)
@@ -180,7 +183,7 @@ function M.wrap_spans(spans, width)
       end
     end
     chars(span[1]:gsub("\t", "    "), function(c)
-      local n = M.display_len(c)
+      local n = valid_display_len(c)
       if cells > 0 and cells + n > width then
         flush()
         lines[#lines + 1] = row
@@ -200,12 +203,12 @@ end
 function M.first_line(text, width)
   width = math.max(math.floor(width), 1)
   local raw = M.sanitize_utf8(text:match("^[^\n]*"))
-  if raw == "" or M.display_len(raw) <= width then
+  if raw == "" or valid_display_len(raw) <= width then
     return raw
   end
   local cut, cells, space = 0, 0, nil
   chars(raw, function(c)
-    local next_cells = cells + M.display_len(c)
+    local next_cells = cells + valid_display_len(c)
     if next_cells > width then
       if cut == 0 then
         cut = #c
@@ -223,16 +226,16 @@ end
 function M.fit_path(path, max)
   path = M.sanitize_utf8(path)
   max = math.max(math.floor(max), 0)
-  if M.display_len(path) <= max then
+  if valid_display_len(path) <= max then
     return path
   end
   if max == 0 then
     return ""
   end
-  local parts, cells = chars(path), M.display_len("…")
+  local parts, cells = chars(path), valid_display_len("…")
   local start = #parts + 1
   for i = #parts, 1, -1 do
-    local n = M.display_len(parts[i])
+    local n = valid_display_len(parts[i])
     if cells + n > max then
       break
     end

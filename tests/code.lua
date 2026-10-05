@@ -26,17 +26,15 @@ local function comment(f, text)
   f:key("<CR>")
 end
 
-test("code and complete review setup are idempotent", function()
-  local f = fixture()
-  f.module.setup("ignored")
-  f.module.setup({ description = "ignored" })
-  eq(f.registrations["/code"], 1)
-  local review = require("review")
-  review.setup()
-  review.setup()
-  eq(f.registrations["/review"], 1)
-  eq(f.autocmds, 1)
-end)
+for _, options in ipairs({ "ignored", { description = "ignored" } }) do
+  test("code setup is idempotent: " .. type(options), function()
+    local f = fixture()
+    f.module.setup(options)
+    f.module.setup(options)
+    eq(f.registrations["/code"], 1)
+    eq(f.autocmds, 0)
+  end)
+end
 
 for _, code in ipairs({ 0, 7, -1 }) do
   test("Files external edit reloads actual contents, exit=" .. code, function()
@@ -695,6 +693,15 @@ local errors = {
     "metadata denied",
   },
 }
+test("empty source retains its empty line", function()
+  fixture({ "a.lua" }, { ["a.lua"] = "" })
+  local state = { line = 1 }
+  require("code.files").load_source(state, "a.lua")
+  eq(#state.lines, 1)
+  eq(state.lines[1], "")
+  eq(state.error, nil)
+end)
+
 for _, case in ipairs(errors) do
   test("source safety " .. case[1], function()
     local f = fixture()

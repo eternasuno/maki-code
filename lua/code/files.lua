@@ -77,9 +77,6 @@ local function read_source(path)
     end
     lines[#lines + 1] = line:gsub("\r$", "")
   end
-  if #lines == 0 then
-    lines[1] = ""
-  end
   return lines, nil, truncated
 end
 
