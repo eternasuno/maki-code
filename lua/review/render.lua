@@ -41,6 +41,7 @@ function M.redraw(state)
       state.editor ~= nil,
       state.lwidth,
       version,
+      state.fquery or "",
     })
   then
     Lists.changes(
@@ -62,6 +63,7 @@ function M.redraw(state)
       state.editor ~= nil,
       state.lwidth,
       version,
+      state.cquery or "",
     })
   then
     if state.commit then
@@ -91,7 +93,7 @@ function M.redraw(state)
       state.sel_commit or false,
       state.info_err or false,
       state.mcursor,
-      state.dcursor,
+      state.dline or state.dcursor,
       state.vstart or false,
       state.vcur or false,
       state.pane == "diff",
@@ -108,11 +110,12 @@ function M.redraw(state)
         { { " " .. state.editor.label .. ": " .. Comments.location(state.editor.record), "accent" } },
         { { " Enter: save  Esc: cancel", "dim" } },
       }
-      local rendered = state.editor.input:render(" │ ", 3, math.max(state.rwidth - 6, 20))
+      local rendered = state.editor.input:render(" │ ", 3, math.max(state.rwidth - 6, 1))
+      local start = #lines
       for _, line in ipairs(rendered.lines) do
         lines[#lines + 1] = line
-        editor_row = #lines
       end
+      editor_row = start + rendered.cursor_row
       state.rbuf:set_lines(lines)
     elseif state.preview_pane == "commits" and not state.commit then
       Right.commit_info(state)
@@ -141,10 +144,29 @@ function M.redraw(state)
   local diff_active = state.pane == "diff" or state.editor ~= nil
 
   local function panel_cfg(win, title, active, footer)
-    win:set_config(Layout.panel_config(state.panel_lwidth, title, active, not state.editor and active and footer or {}))
+    local pane = win == state.fwin and "files" or win == state.cwin and "commits" or "comments"
+    local query = pane == "files" and state.fquery or pane == "commits" and state.commit and state.cquery
+    if query and query ~= "" then
+      title = title .. "/" .. Text.display(query) .. " "
+    end
+    local hints = not state.editor and active and footer or {}
+    if state.search_input and active then
+      hints = { { "↑↓", "select" }, { "Enter", "keep" }, { "Esc", "clear" } }
+    end
+    local config = Layout.panel_config(state.panel_lwidth, title, active, hints)
+    if state.search_input and active then
+      local prefix = title:match("^(.-)/") or title
+      local text = state.search_input:value()
+      config.title = prefix .. "/" .. Text.display(text)
+      config.title_cursor = #prefix
+        + 1
+        + #Text.display(text:sub(1, state.search_input.col or state.search_input.cursor or #text))
+    end
+    win:set_config(config)
   end
 
   panel_cfg(state.fwin, " [1] Files (" .. #state.working_changes .. ") ", state.pane == "files" and not state.editor, {
+    { "/", "search" },
     { "Enter", "diff" },
     { "e", "edit" },
     { "c", "comment" },
@@ -155,7 +177,7 @@ function M.redraw(state)
   local ctitle, cfooter
   if state.commit then
     ctitle = " [2] Commits: " .. state.commit.sha .. " (" .. #(state.commit_changes or {}) .. ") "
-    cfooter = { { "Enter", "diff" }, { "c", "comment" }, { "Esc", "back" } }
+    cfooter = { { "/", "search" }, { "Enter", "diff" }, { "c", "comment" }, { "Esc", "back" } }
   else
     ctitle = " [2] Commits "
     cfooter = { { "Enter", "open" }, { "Esc", "close" } }
@@ -163,6 +185,7 @@ function M.redraw(state)
   panel_cfg(state.cwin, ctitle, state.pane == "commits" and not state.editor, cfooter)
 
   panel_cfg(state.mwin, " [3] Comments (" .. #comments .. ") ", state.pane == "comments" and not state.editor, {
+    { "Enter", "jump" },
     { "c", "edit" },
     { "d", "delete" },
     { "s", "submit " .. #comments },

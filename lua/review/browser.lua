@@ -75,6 +75,9 @@ end
 
 -- Toggles a directory row in the files / commit-files tree.
 local function toggle_dir(state, dir)
+  if (state.pane == "files" and state.fquery ~= "") or (state.pane == "commits" and state.cquery ~= "") then
+    return
+  end
   local set = state.pane == "commits" and state.ccollapsed or state.fcollapsed
   Tree.toggle_dir(set, dir)
   local key = state.pane == "commits" and "ccollapse_revision" or "fcollapse_revision"
@@ -161,8 +164,13 @@ end
 
 local function set_active_cursor(state, r)
   if state.pane == "diff" then
+    local index = state.drow_map[r]
+    while r > 1 and state.drow_map[r - 1] == index do
+      r = r - 1
+    end
     if r ~= state.dcursor then
       state.dcursor = r
+      state.dline = state.drow_map[r]
       if state.vstart then
         state.vcur = state.drow_map[r]
       end
@@ -185,7 +193,7 @@ local function move(state, dir, count)
   local total = buf:len()
   for _ = 1, count do
     local nr = r + dir
-    while nr >= 1 and nr <= total and not row_map[nr] do
+    while nr >= 1 and nr <= total and (not row_map[nr] or (state.pane == "diff" and row_map[nr] == row_map[r])) do
       nr = nr + dir
     end
     if row_map[nr] then
@@ -213,6 +221,129 @@ local function jump(state, to_end)
   if best then
     set_active_cursor(state, best)
   end
+end
+
+local function apply_search(state, query)
+  local committed = state.pane == "commits"
+  local key = committed and "cquery" or "fquery"
+  local cursor_key = committed and "ccursor" or "fcursor"
+  local map = committed and state.crow_map or state.frow_map
+  local selected = map[state[cursor_key]]
+  state[key] = query
+  Lists.prepare(state)
+  map = committed and state.crow_map or state.frow_map
+  state[cursor_key] = 1
+  local first
+  for row, value in ipairs(map) do
+    if type(value) == "number" then
+      first = first or row
+    end
+    if value == selected then
+      state[cursor_key] = row
+      first = row
+      break
+    end
+  end
+  state[cursor_key] = first or 1
+  Files.load_preview(state)
+  Render.redraw(state)
+end
+
+local function jump_comment(state)
+  local record = comments[state.mrow_map[state.mcursor]]
+  if not record then
+    return
+  end
+  local path = Comments.path(record)
+  local committed = record.commit ~= nil
+  local changes = state.working_changes
+  if committed then
+    local err
+    changes, err = Git.commit_changes(state.root, record.commit)
+    if not changes then
+      maki.ui.flash("Cannot locate comment: " .. tostring(err))
+      return
+    end
+  end
+  local kind = Comments.kind(record)
+  local found
+  for index, change in ipairs(changes) do
+    if (kind == "dir" and change.path:sub(1, #path + 1) == path .. "/") or (kind ~= "dir" and change.path == path) then
+      found = index
+      break
+    end
+  end
+  if not found then
+    maki.ui.flash("Comment target is no longer in this diff")
+    return
+  end
+  local preview = {
+    root = state.root,
+    working_changes = changes,
+    frow_map = { found },
+    fcursor = 1,
+    preview_pane = "files",
+    cache = state.cache,
+  }
+  if kind ~= "dir" then
+    Files.load_preview(preview)
+    if kind == "line" and (not preview.dlines or #preview.dlines == 0) then
+      maki.ui.flash("Cannot locate comment: " .. tostring(preview.diff_err or "No diff lines"))
+      return
+    end
+  end
+  local anchor
+  if kind == "line" then
+    local side = record.anchor == "old" and "old_ln" or "new_ln"
+    local target = record.anchor == "old" and record.old_start or record.new_start
+    for index, line in ipairs(preview.dlines) do
+      if line[side] == target and (side ~= "old_ln" or line.kind == "del") then
+        anchor = index
+        break
+      end
+    end
+    if not anchor then
+      maki.ui.flash("Comment line is no longer in this diff; snapshot retained")
+      return
+    end
+  end
+  local pane = committed and "commits" or "files"
+  if committed then
+    state.saved_ccursor = state.commit and state.saved_ccursor or state.ccursor
+    state.commit = { sha = record.commit }
+    state.commit_changes = changes
+    state.cquery = ""
+    state.ccollapsed = {}
+    state.ccollapse_revision = state.ccollapse_revision + 1
+  else
+    state.fquery = ""
+    local parent = path
+    while parent do
+      state.fcollapsed[parent] = nil
+      parent = parent:match("^(.*)/[^/]+$")
+    end
+    state.fcollapse_revision = state.fcollapse_revision + 1
+  end
+  state.preview_pane, state.pane = pane, pane
+  state.vstart = nil
+  Lists.prepare(state)
+  local map = committed and state.crow_map or state.frow_map
+  local cursor_key = committed and "ccursor" or "fcursor"
+  for row, value in ipairs(map) do
+    if
+      (kind == "dir" and type(value) == "table" and (value.dir == path or value.dir:sub(1, #path + 1) == path .. "/"))
+      or (kind ~= "dir" and value == found)
+    then
+      state[cursor_key] = row
+      break
+    end
+  end
+  Files.load_preview(state)
+  if kind ~= "dir" and state.dlines and #state.dlines > 0 then
+    state.pane = "diff"
+    state.dline = anchor or 1
+  end
+  Render.redraw(state)
 end
 
 --- comment editing ---------------------------------------------------------
@@ -338,6 +469,8 @@ function M.create_state(root, changes, commits)
     ccursor = 1,
     mcursor = 1,
     dcursor = 1,
+    fquery = "",
+    cquery = "",
     frow_map = {},
     crow_map = {},
     mrow_map = {},
@@ -380,6 +513,26 @@ local function handle_event(state, ev)
     Render.redraw(state)
     return true
   end
+  if state.search_input then
+    if ev.type == "paste" then
+      state.search_input:insert_text(ev.text)
+      apply_search(state, state.search_input:value())
+    elseif ev.type == "key" then
+      if ev.key == "<CR>" then
+        state.search_input = nil
+        Render.redraw(state)
+      elseif ev.key == "<Esc>" or ev.key == "<C-c>" then
+        state.search_input = nil
+        apply_search(state, "")
+      elseif ev.key == "<Up>" or ev.key == "<Down>" then
+        move(state, ev.key == "<Up>" and -1 or 1)
+      else
+        state.search_input:handle_key(ev.key)
+        apply_search(state, state.search_input:value())
+      end
+    end
+    return true
+  end
   if ev.type == "paste" and state.editor then
     state.editor.input:insert_text(ev.text)
     state.editor_revision = (state.editor_revision or 0) + 1
@@ -407,7 +560,21 @@ local function handle_event(state, ev)
     return true
   end
 
-  if key == "<Up>" or key == "k" then
+  if key == "/" and (state.pane == "files" or (state.pane == "commits" and state.commit)) then
+    state.search_input = TextInput.new()
+    state.search_input:insert_text(state.pane == "files" and state.fquery or state.cquery)
+    Render.redraw(state)
+  elseif key == "r" then
+    M.refresh(state)
+  elseif
+    key == "<Esc>"
+    and (
+      (state.pane == "files" and state.fquery ~= "")
+      or (state.pane == "commits" and state.commit and state.cquery ~= "")
+    )
+  then
+    apply_search(state, "")
+  elseif key == "<Up>" or key == "k" then
     move(state, -1)
   elseif key == "<Down>" or key == "j" then
     move(state, 1)
@@ -439,8 +606,8 @@ local function handle_event(state, ev)
     elseif key == "<CR>" or key == "l" or key == "<Right>" then
       if state.pane == "commits" and not state.commit then
         enter_commit(state)
-      elseif state.pane == "comments" then
-        maki.ui.flash("d deletes the selected comment")
+      elseif state.pane == "comments" and key ~= "l" then
+        jump_comment(state)
       else
         local cursor, row_map = active_view(state)
         local sel = row_map[cursor]
@@ -452,8 +619,6 @@ local function handle_event(state, ev)
       end
     elseif key == "d" and state.pane == "comments" then
       delete_selected_comment(state)
-    elseif key == "r" then
-      M.refresh(state)
     elseif key == "h" or key == "<Left>" then
       local cursor, row_map = active_view(state)
       local sel = row_map[cursor]
@@ -476,7 +641,7 @@ local function handle_event(state, ev)
       end
     end
   else -- diff pane
-    if key == "c" or key == "<CR>" then
+    if key == "c" then
       open_comment_editor(state)
     elseif key == "v" then
       if state.vstart then
@@ -514,7 +679,49 @@ M.close = Windows.close
 M.redraw = Render.redraw
 
 function M.refresh(state)
+  local change, dlines, hl = state.change, state.dlines, state.hl
+  local line = dlines and dlines[state.dline or state.drow_map[state.dcursor]]
+  local focused = state.pane == "diff"
+  local logical = state.dline
+  local path = change and change.path
+  local side = line and (line.kind == "del" and "old_ln" or "new_ln")
+  local number = side and line[side]
   Files.refresh(state)
+  if path and state.preview_pane ~= "comments" then
+    local committed = state.preview_pane == "commits"
+    local changes = committed and state.commit_changes or state.working_changes
+    local map = committed and state.crow_map or state.frow_map
+    local cursor_key = committed and "ccursor" or "fcursor"
+    local found
+    for row, index in ipairs(map) do
+      if type(index) == "number" and changes[index].path == path then
+        state[cursor_key] = row
+        found = true
+        break
+      end
+    end
+    if found then
+      Files.load_preview(state)
+      if not state.dlines and state.diff_err and dlines then
+        state.change, state.dlines, state.hl = change, dlines, hl
+        state.dline = logical
+        maki.ui.flash("Refresh failed; previous diff retained")
+      end
+      if number then
+        for index, candidate in ipairs(state.dlines or {}) do
+          if candidate[side] == number and (side ~= "old_ln" or candidate.kind == "del") then
+            state.dline = index
+            break
+          end
+        end
+      end
+    else
+      if focused then
+        state.pane = state.preview_pane
+      end
+      maki.ui.flash("File is no longer in this diff")
+    end
+  end
   Render.redraw(state)
 end
 return M

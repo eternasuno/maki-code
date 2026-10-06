@@ -97,6 +97,47 @@ test("real diff parser and highlighting preserve anchors", function(h)
   eq(h.counts.highlight, 1)
 end)
 
+test("long diff rows wrap without losing tabs, styles, or logical navigation", function(h)
+  local s = h:open()
+  local long = "\t" .. string.rep("wrapped text ", 12)
+  local Diff = require("review.diff")
+  s.dlines = Diff.parse("@@ -1 +1 @@\n-" .. long .. "\n+new")
+  s.change.diff = nil
+  s.cache[(s.change.commit or "") .. ":" .. s.change.path] = { dlines = s.dlines }
+  h.browser.redraw(s)
+  local rows = s.dlines
+  assert(#rows >= 3)
+  local rendered = h:text(s.rbuf)
+  contains(rendered, "↪")
+  contains(rendered, "wrapped")
+  h:key("4")
+  local source_row
+  for i, row in ipairs(s.drow_map) do
+    if row == 2 then
+      source_row = i
+    end
+  end
+  assert(source_row)
+  s.dcursor = source_row
+  h:key("j")
+  assert(s.drow_map[s.dcursor] > 2)
+  h:key("k")
+  eq(s.drow_map[s.dcursor], 2)
+  contains(
+    table.concat(
+      (function()
+        local t = {}
+        for _, row in ipairs(rows) do
+          t[#t + 1] = row.text
+        end
+        return t
+      end)(),
+      ""
+    ),
+    "wrapped"
+  )
+end)
+
 test("initial preview selects a real file and starts on changed line", function(h)
   local s = h:open()
   eq(s.fcursor, 2)
@@ -547,6 +588,81 @@ for _, text in ipairs({ "日本語のコメント", "emoji 😀 comment", "é a
   end)
 end
 
+test("file and commit searches are independent and Enter keeps the filter", function(h)
+  local s = h:open()
+  h:key("/")
+  h:paste("deep/b")
+  eq(s.fquery, "deep/b")
+  eq(s.change.path, "src/deep/b.lua")
+  h:key("<CR>")
+  eq(s.fquery, "deep/b")
+  eq(s.pane, "files")
+  h:key("2")
+  h:key("l")
+  h:key("/")
+  h:paste("second")
+  h:key("<CR>")
+  eq(s.cquery, "second")
+  eq(s.fquery, "deep/b")
+  h:key("<Esc>")
+  eq(s.cquery, "")
+  eq(s.fquery, "deep/b")
+end)
+
+test("Diff Enter does not open editor while editor Enter saves", function(h)
+  local s = h:open()
+  h:key("4")
+  h:key("<CR>")
+  eq(s.editor, nil)
+  h:key("c")
+  h:paste("inline")
+  h:key("<CR>")
+  eq(h.comments.store[1].text, "inline")
+end)
+
+test("Right from commit comment returns to working file side and line", function(h)
+  local s = h:open()
+  Comments.add(h.comments.store, {
+    target = { kind = "line", path = "src/deep/b.lua" },
+    anchor = "old",
+    old_start = 7,
+    old_end = 7,
+    text = "commit",
+    commit = "abc",
+  })
+  h:key("3")
+  h:key("<Right>")
+  eq(s.change.path, "src/deep/b.lua")
+  eq(s.preview_pane, "commits")
+  assert(s.dlines[s.dline].old_ln == 7 or s.dlines[s.dline].new_ln == 7)
+end)
+
+test("comment Enter and Right jump to working targets and preserve missing targets", function(h)
+  local s = h:open()
+  Comments.add(h.comments.store, { target = { kind = "file", path = "src/deep/b.lua" }, text = "file" })
+  Comments.add(
+    h.comments.store,
+    { target = { kind = "line", path = "src/deep/b.lua" }, anchor = "old", old_start = 7, old_end = 7, text = "old" }
+  )
+  h:key("3")
+  h:key("<CR>")
+  eq(s.pane, "diff")
+  eq(s.change.path, "src/deep/b.lua")
+  eq(s.dlines[s.dline].kind, "hunk")
+  h:key("j")
+  eq(s.dlines[s.dline].kind, "del")
+  h:key("3")
+  h:key("<Right>")
+  eq(s.change.path, "src/deep/b.lua")
+  local count = #h.comments.store
+  h.comments.store[1].target.path = "gone.lua"
+  h:key("3")
+  h:key("<CR>")
+  eq(#h.comments.store, count)
+  eq(s.pane, "comments")
+  contains(last_flash(h), "no longer")
+end)
+
 test("mixed badges include compressed ancestors and isolate commits", function(h)
   local s = h:open()
   Comments.add(h.comments.store, { target = { kind = "dir", path = "src" }, text = "ancestor" })
@@ -567,8 +683,36 @@ test("mixed badges include compressed ancestors and isolate commits", function(h
   h:key("d")
   eq(#h.comments.store, 2)
   eq(s.mcursor, 1)
+  local selected = h.comments.store[s.mrow_map[s.mcursor]]
   h:key("<CR>")
-  contains(last_flash(h), "d deletes")
+  eq(s.pane, "diff")
+  eq(s.change.path, selected.target.path)
+  eq(s.editor, nil)
+end)
+
+test("resize preserves selected logical diff line", function(h)
+  local s = h:open()
+  h:key("4")
+  h:key("j")
+  local selected = s.dline
+  h.size = { cols = 60, rows = 18 }
+  h.browser.handle_event(s, { type = "resize" })
+  eq(s.dline, selected)
+end)
+
+test("git diff failure retains prior rendered lines", function(h)
+  local s = h:open()
+  h:key("4")
+  local before = s.dlines
+  h.git_fail = "diff --no-color"
+  local original = require("review.git").raw_diff
+  require("review.git").raw_diff = function()
+    return nil, "Git unavailable"
+  end
+  s.cache[(s.change.commit or "") .. ":" .. s.change.path] = nil
+  h.browser.refresh(s)
+  require("review.git").raw_diff = original
+  eq(s.dlines, before)
 end)
 
 test("inline deletion skips rendered comment blocks and removes only line record", function(h)
@@ -989,6 +1133,52 @@ test("long Unicode commit subject truncation", function(h)
   h.browser.redraw(s)
   contains(h:text(s.cbuf), "…")
   contains(h:text(s.cbuf), "日本")
+end)
+
+test("wrapped hunk width repeated End and multiline editor cursor", function(h)
+  h.raw = "@@ -7 +7 @@ " .. string.rep("context ", 40) .. "\n+" .. string.rep("code ", 60) .. "\n"
+  local s = h:open()
+  h:key("4")
+  for _, row in ipairs(s.rbuf:get_lines()) do
+    local text = ""
+    for _, span in ipairs(row) do
+      text = text .. span[1]
+    end
+    assert(require("common.text").display_len(text) <= s.rwidth)
+  end
+  h:key("G")
+  local row = s.dcursor
+  h:key("G")
+  eq(s.dcursor, row)
+  h:key("c")
+  s.editor.input.render = function()
+    return { lines = { { { "one", "item" } }, { { "two", "item" } }, { { "three", "item" } } }, cursor_row = 1 }
+  end
+  s.editor_revision = (s.editor_revision or 0) + 1
+  h.browser.redraw(s)
+  eq(s.editor_row, s.rbuf:len() - 3)
+  h:key("<Esc>")
+  h:key("1")
+  h:key("c")
+  s.editor.input.render = function()
+    return { lines = { { { "one", "item" } }, { { "two", "item" } }, { { "three", "item" } } }, cursor_row = 2 }
+  end
+  s.editor_revision = (s.editor_revision or 0) + 1
+  h.browser.redraw(s)
+  eq(s.editor_row, 4)
+end)
+
+test("left refresh retains selected path and failed preview", function(h)
+  local s = h:open()
+  local path = s.change.path
+  h.paths = { "aaa/new.lua", "a.lua", "src/deep/b.lua", "src/deep/c.lua" }
+  h:key("r")
+  eq(s.change.path, path)
+  local lines = s.dlines
+  h.git_fail = "diff --no-color"
+  h:key("r")
+  eq(s.dlines, lines)
+  contains(last_flash(h), "previous diff retained")
 end)
 
 print(tests .. " review behavior tests passed (original modules, no source extraction)")

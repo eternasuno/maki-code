@@ -14,8 +14,11 @@ local STATUS_STYLE = { M = "warning", A = "diff_new", D = "diff_old", R = "accen
 local function render_change_list(state, buf, changes, cursor, active, empty_msg, collapsed)
   local width = math.max(state.lwidth, 20)
   local lines = {}
+  local prepared = state.list_cache[changes]
   if #changes == 0 then
     lines[#lines + 1] = { { empty_msg, "dim" } }
+  elseif #prepared.rows == 0 then
+    lines[#lines + 1] = { { "  No matching paths.", "dim" } }
   end
 
   local function push(spans)
@@ -63,6 +66,9 @@ local function render_change_list(state, buf, changes, cursor, active, empty_msg
 
   local function emit_dir(d, depth)
     local isc = collapsed[d.path]
+    if prepared.query ~= "" then
+      isc = false
+    end
     local commit = changes[1] and changes[1].commit
     local ncoms = ReviewComments.count_under(d.start_path, commit)
     local right = isc and (d.nfiles .. " files") or ""
@@ -83,7 +89,6 @@ local function render_change_list(state, buf, changes, cursor, active, empty_msg
     push(spans)
   end
 
-  local prepared = state.list_cache[changes]
   for _, row in ipairs(prepared.rows) do
     if row.dir then
       emit_dir(prepared.dirs[row.dir], row.depth)
@@ -196,15 +201,63 @@ function M.prepare(state)
         end
       end
       prepare_dir(cached.tree)
+      cached.base_dirs = cached.dirs
+      cached.prepare_dir = prepare_dir
       state.list_cache[changes] = cached
     end
-    if cached.collapsed ~= collapsed or cached.revision ~= revision then
-      cached.rows = Tree.flatten(cached.tree, collapsed)
+    local query = changes == state.working_changes and (state.fquery or "") or (state.cquery or "")
+    local query_key = query:lower()
+    if cached.collapsed ~= collapsed or cached.revision ~= revision or cached.query ~= query_key then
+      if query_key == "" then
+        cached.rows = Tree.flatten(cached.tree, collapsed)
+        cached.dirs = cached.base_dirs
+      else
+        cached.search_entries = cached.search_entries or {}
+        if #cached.search_entries ~= #changes then
+          cached.search_entries = {}
+          for i, change in ipairs(changes) do
+            cached.search_entries[i] = { idx = i, path_lower = change.path:lower() }
+          end
+        end
+        local filtered, original = {}, {}
+        local characters = {}
+        for character in query_key:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
+          characters[#characters + 1] = character
+        end
+        for _, entry in ipairs(cached.search_entries) do
+          local matched = entry.path_lower:find(query_key, 1, true) ~= nil
+          if not matched then
+            local start = 1
+            matched = true
+            for _, character in ipairs(characters) do
+              local _, stop = entry.path_lower:find(character, start, true)
+              if not stop then
+                matched = false
+                break
+              end
+              start = stop + 1
+            end
+          end
+          if matched then
+            filtered[#filtered + 1] = changes[entry.idx]
+            original[#original + 1] = entry.idx
+          end
+        end
+        local tree = Tree.build_tree(filtered)
+        cached.dirs = {}
+        cached.prepare_dir(tree)
+        cached.rows = Tree.flatten(tree)
+        for _, row in ipairs(cached.rows) do
+          if row.idx then
+            row.idx = original[row.idx]
+          end
+        end
+      end
       cached.map = {}
       for i, row in ipairs(cached.rows) do
         cached.map[i] = row.dir and { dir = row.dir } or row.idx
       end
-      cached.collapsed, cached.revision = collapsed, revision
+      cached.collapsed, cached.revision, cached.query = collapsed, revision, query_key
     end
     return cached.map
   end
