@@ -167,7 +167,7 @@ local function render_diff(state)
           { "  Enter: save  Esc: cancel", "dim" },
         }
         local start = #lines
-        local r = state.editor.input:render("    │ ", 6, math.max(width - 8, 1))
+        local r = Text.render_input(state.editor.input, "    │ ", math.max(width - 2, 1))
         for _, l in ipairs(r.lines) do
           lines[#lines + 1] = l
         end

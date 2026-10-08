@@ -372,14 +372,29 @@ for index, text in ipairs({ string.rep("中文", 30), string.rep("😀🚀", 30)
       eq(table.concat(wrapped), text)
     end
     local function check_editor()
-      local found = false
+      local pieces, editing = {}, false
       for _, row in ipairs(f:win("Source").buf.content) do
-        if row[1][1]:sub(1, #"    │ ") == "    │ " then
-          eq(row[1][1], "    │ " .. text)
-          found = true
+        if row[1][1] == "    │ " then
+          editing = true
+        elseif row[1][1] == "    └" then
+          editing = false
+        end
+
+        if editing then
+          local cells = 0
+          for part, span in ipairs(row) do
+            cells = cells + Utils.display_len(span[1])
+            if part > 1 then
+              pieces[#pieces + 1] = span[1]
+            end
+          end
+
+          assert(cells <= f:win("Source").width)
         end
       end
-      assert(found, "Expected complete saved text in reopened editor")
+
+      assert(#pieces > 1, "Expected wrapped saved text in reopened editor")
+      eq(table.concat(pieces), text)
     end
     comment(f, text)
     f:key("<CR>")

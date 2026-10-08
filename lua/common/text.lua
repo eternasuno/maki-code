@@ -200,6 +200,31 @@ function M.wrap_spans(spans, width)
   return lines
 end
 
+function M.render_input(input, prefix, width)
+  local rendered = input:render("", 0)
+  local lines, cursor_row = {}, 1
+  local padding = string.rep(" ", M.display_len(prefix))
+  local usable = math.max(width - M.display_len(prefix), 1)
+  for index, spans in ipairs(rendered.lines) do
+    if index == rendered.cursor_row then
+      cursor_row = #lines + 1
+    end
+
+    for _, row in ipairs(M.wrap_spans(spans, usable)) do
+      for _, span in ipairs(row) do
+        if span[2] == "cursor" then
+          cursor_row = #lines + 1
+        end
+      end
+
+      table.insert(row, 1, { #lines == 0 and prefix or padding, "dim" })
+      lines[#lines + 1] = row
+    end
+  end
+
+  return { lines = lines, cursor_row = cursor_row }
+end
+
 function M.first_line(text, width)
   width = math.max(math.floor(width), 1)
   local raw = M.sanitize_utf8(text:match("^[^\n]*"))

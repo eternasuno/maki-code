@@ -110,7 +110,7 @@ function M.redraw(state)
         { { " " .. state.editor.label .. ": " .. Comments.location(state.editor.record), "accent" } },
         { { " Enter: save  Esc: cancel", "dim" } },
       }
-      local rendered = state.editor.input:render(" │ ", 3, math.max(state.rwidth - 6, 1))
+      local rendered = Text.render_input(state.editor.input, " │ ", math.max(state.rwidth - 3, 1))
       local start = #lines
       for _, line in ipairs(rendered.lines) do
         lines[#lines + 1] = line

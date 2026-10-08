@@ -42,6 +42,47 @@ local function old_wrap(text, width)
 end
 
 return function(test, eq)
+  test("comment input wraps display cells and keeps cursor visible", function()
+    maki = nil
+    local input = {
+      render = function(_, prefix, prefix_width, width)
+        eq(prefix, "")
+        eq(prefix_width, 0)
+        eq(width, nil)
+
+        return {
+          lines = {
+            { { "中文中文", "" }, { "界", "cursor" }, { " é😀", "" } },
+            { { "", "" }, { " ", "cursor" } },
+          },
+          cursor_row = 2,
+        }
+      end,
+    }
+    local rendered = Text.render_input(input, " │ ", 9)
+    local text, cursors = {}, {}
+    for index, row in ipairs(rendered.lines) do
+      local cells = 0
+      for part, span in ipairs(row) do
+        cells = cells + Text.display_len(span[1])
+        if part > 1 then
+          text[#text + 1] = span[1]
+        end
+
+        if span[2] == "cursor" then
+          cursors[#cursors + 1] = index
+        end
+      end
+
+      assert(cells <= 9)
+    end
+
+    eq(table.concat(text), "中文中文界 é😀 ")
+    eq(rendered.cursor_row, cursors[#cursors])
+    assert(cursors[1] > 1)
+    eq(rendered.lines[1][1][1], " │ ")
+    eq(rendered.lines[2][1][1], "   ")
+  end)
   test("styled wrapping preserves whitespace styles and Unicode", function()
     maki = nil
     local style = { fg = "#ffffff", bold = true }
