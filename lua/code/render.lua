@@ -160,8 +160,7 @@ local function render_source(state, maps)
   local function append_editor()
     local record = state.editor.record
     append({ { "    ┌ Comment: " .. display(Comments.location(record)) .. "  Enter: save  Esc: cancel", "accent" } })
-    local rendered =
-      state.editor.input:render("    │ ", Text.display_len("    │ "), math.max(1, state.source_width - 8))
+    local rendered = Text.render_input(state.editor.input, "    │ ", math.max(1, state.source_width - 2))
     local start = #source
     for _, entry in ipairs(rendered.lines) do
       append(entry)

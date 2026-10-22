@@ -1,33 +1,8 @@
 local Text = require("common.text")
 local function chars(s)
-  local out, i = {}, 1
-  while i <= #s do
-    local b = s:byte(i)
-    local n = b < 128 and 1
-      or (b >= 194 and b <= 223 and 2)
-      or (b >= 224 and b <= 239 and 3)
-      or (b >= 240 and b <= 244 and 4)
-      or 0
-    local valid = n > 0 and i + n - 1 <= #s
-    for j = i + 1, i + n - 1 do
-      local c = s:byte(j)
-      if not c or c < 128 or c > 191 then
-        valid = false
-      end
-    end
-    local second = s:byte(i + 1)
-    if n == 3 and ((b == 224 and second and second < 160) or (b == 237 and second and second >= 160)) then
-      valid = false
-    end
-    if n == 4 and ((b == 240 and second and second < 144) or (b == 244 and second and second >= 144)) then
-      valid = false
-    end
-    if valid then
-      out[#out + 1] = s:sub(i, i + n - 1)
-      i = i + n
-    else
-      i = i + 1
-    end
+  local out = {}
+  for c in s:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
+    out[#out + 1] = c
   end
   return out
 end
@@ -67,6 +42,47 @@ local function old_wrap(text, width)
 end
 
 return function(test, eq)
+  test("comment input wraps display cells and keeps cursor visible", function()
+    maki = nil
+    local input = {
+      render = function(_, prefix, prefix_width, width)
+        eq(prefix, "")
+        eq(prefix_width, 0)
+        eq(width, nil)
+
+        return {
+          lines = {
+            { { "中文中文", "" }, { "界", "cursor" }, { " é😀", "" } },
+            { { "", "" }, { " ", "cursor" } },
+          },
+          cursor_row = 2,
+        }
+      end,
+    }
+    local rendered = Text.render_input(input, " │ ", 9)
+    local text, cursors = {}, {}
+    for index, row in ipairs(rendered.lines) do
+      local cells = 0
+      for part, span in ipairs(row) do
+        cells = cells + Text.display_len(span[1])
+        if part > 1 then
+          text[#text + 1] = span[1]
+        end
+
+        if span[2] == "cursor" then
+          cursors[#cursors + 1] = index
+        end
+      end
+
+      assert(cells <= 9)
+    end
+
+    eq(table.concat(text), "中文中文界 é😀 ")
+    eq(rendered.cursor_row, cursors[#cursors])
+    assert(cursors[1] > 1)
+    eq(rendered.lines[1][1][1], " │ ")
+    eq(rendered.lines[2][1][1], "   ")
+  end)
   test("styled wrapping preserves whitespace styles and Unicode", function()
     maki = nil
     local style = { fg = "#ffffff", bold = true }
@@ -134,6 +150,17 @@ return function(test, eq)
       end
     end
     maki = nil
+  end)
+  test("wrap sanitizes input once", function()
+    local sanitize, calls = Text.sanitize_utf8, 0
+    Text.sanitize_utf8 = function(s)
+      calls = calls + 1
+      return sanitize(s)
+    end
+    local ok, err = pcall(Text.wrap, "hello world", 4)
+    Text.sanitize_utf8 = sanitize
+    assert(ok, err)
+    eq(calls, 1)
   end)
   test("wrap measurement work and first-line short circuit", function()
     local calls, bytes = 0, 0

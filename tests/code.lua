@@ -26,17 +26,15 @@ local function comment(f, text)
   f:key("<CR>")
 end
 
-test("code and complete review setup are idempotent", function()
-  local f = fixture()
-  f.module.setup("ignored")
-  f.module.setup({ description = "ignored" })
-  eq(f.registrations["/code"], 1)
-  local review = require("review")
-  review.setup()
-  review.setup()
-  eq(f.registrations["/review"], 1)
-  eq(f.autocmds, 1)
-end)
+for _, options in ipairs({ "ignored", { description = "ignored" } }) do
+  test("code setup is idempotent: " .. type(options), function()
+    local f = fixture()
+    f.module.setup(options)
+    f.module.setup(options)
+    eq(f.registrations["/code"], 1)
+    eq(f.autocmds, 0)
+  end)
+end
 
 for _, code in ipairs({ 0, 7, -1 }) do
   test("Files external edit reloads actual contents, exit=" .. code, function()
@@ -374,14 +372,29 @@ for index, text in ipairs({ string.rep("中文", 30), string.rep("😀🚀", 30)
       eq(table.concat(wrapped), text)
     end
     local function check_editor()
-      local found = false
+      local pieces, editing = {}, false
       for _, row in ipairs(f:win("Source").buf.content) do
-        if row[1][1]:sub(1, #"    │ ") == "    │ " then
-          eq(row[1][1], "    │ " .. text)
-          found = true
+        if row[1][1] == "    │ " then
+          editing = true
+        elseif row[1][1] == "    └" then
+          editing = false
+        end
+
+        if editing then
+          local cells = 0
+          for part, span in ipairs(row) do
+            cells = cells + Utils.display_len(span[1])
+            if part > 1 then
+              pieces[#pieces + 1] = span[1]
+            end
+          end
+
+          assert(cells <= f:win("Source").width)
         end
       end
-      assert(found, "Expected complete saved text in reopened editor")
+
+      assert(#pieces > 1, "Expected wrapped saved text in reopened editor")
+      eq(table.concat(pieces), text)
     end
     comment(f, text)
     f:key("<CR>")
@@ -695,6 +708,15 @@ local errors = {
     "metadata denied",
   },
 }
+test("empty source retains its empty line", function()
+  fixture({ "a.lua" }, { ["a.lua"] = "" })
+  local state = { line = 1 }
+  require("code.files").load_source(state, "a.lua")
+  eq(#state.lines, 1)
+  eq(state.lines[1], "")
+  eq(state.error, nil)
+end)
+
 for _, case in ipairs(errors) do
   test("source safety " .. case[1], function()
     local f = fixture()

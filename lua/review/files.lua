@@ -13,6 +13,7 @@ function M.load_preview(state)
   state.vstart = nil
   state.editor = nil
   state.dcursor = 1
+  state.dline = nil
   state.sel_commit = nil
   state.info_err = nil
 
@@ -78,6 +79,7 @@ function M.load_preview(state)
       break
     end
   end
+  state.dline = state.dcursor
 end
 
 function M.refresh(state)
