@@ -264,9 +264,7 @@ test("highlight maps source extensions and filenames", function()
   end
 end)
 
-test("highlight unavailable errors malformed result and mismatch fallback", function()
-  maki = nil
-  eq(Highlight.highlight_file("a", { "one" }), nil)
+test("highlight errors malformed result and mismatch fallback", function()
   for _, callback in ipairs({
     function()
       error("unsupported")

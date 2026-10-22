@@ -389,7 +389,7 @@ fn commands_and_turn_end_work_with_declared_permissions() {
 
     assert_eq!(
         include_str!("../plugin.toml").trim(),
-        "[permissions]\nrun = true\nfs_read = true",
+        "min_maki_version = \"0.6.4\"\n\n[permissions]\nrun = true\nfs_read = true",
         "update the test grants when the package permission request changes"
     );
     let (_registry, host) =

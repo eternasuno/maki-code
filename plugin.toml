@@ -1,3 +1,5 @@
+min_maki_version = "0.6.4"
+
 [permissions]
 run = true
 fs_read = true

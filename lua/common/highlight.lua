@@ -1,7 +1,7 @@
 local M = {}
 
 function M.highlight_file(path, lines)
-  if #lines == 0 or not maki or not maki.ui or not maki.ui.highlight then
+  if #lines == 0 then
     return nil
   end
   local lang = path:match("%.([%w_]+)$") or path:match("([^/]+)$") or ""

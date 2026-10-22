@@ -97,7 +97,7 @@ Requiring either module alone registers nothing. Both `setup()` functions are id
 
 ## Installation and permissions
 
-Requires Git on `PATH`, a POSIX shell environment, and Maki's Lua UI, TextInput, filesystem, and chat input APIs (`input` / `input_edit`). Start Maki in the project directory you want to browse.
+Requires Maki **0.6.4 or newer**, Git on `PATH`, and a POSIX shell environment. The plugin targets the 0.6.4 Lua UI, TextInput, filesystem, and chat input APIs (`input` / `input_edit`); older Maki versions are not supported. Start Maki in the project directory you want to browse.
 
 ### Managed package
 
@@ -122,6 +122,8 @@ Use your Maki data directory and a group such as `local`, not the reserved `core
 Copy `lua/review/`, `lua/code/`, and `lua/common/` into your Maki configuration's `lua/` directory. Grant permissions with a `plugin.toml` next to each copied module file (including the common modules), containing:
 
 ```toml
+min_maki_version = "0.6.4"
+
 [permissions]
 run = true
 fs_read = true
@@ -134,7 +136,7 @@ require("review").setup()
 require("code").setup()
 ```
 
-Choose one installation method to avoid loading separate copies. The package requests `run` for Git subprocesses and `fs_read` for source metadata/content. It does not request filesystem write or network access; approve the requested permissions in Maki. Agent modification from comments begins only after you manually send the filled prompt, under the current session’s permissions. The `e` shortcut independently allows editing through your external editor.
+Choose one installation method to avoid loading separate copies. The package requests `run` for Git subprocesses and `fs_read` for source metadata/content. It does not request filesystem write, network, or `agent` access; approve the requested permissions in Maki. Agent modification from comments begins only after you manually send the filled prompt, under the current session’s permissions. The `e` shortcut independently allows editing through your external editor.
 
 ## Verification
 
@@ -146,7 +148,7 @@ just test-lua
 
 This runs `tests/review_keys.lua`, `tests/review_git.lua`, `tests/code.lua`, and `tests/common.lua`. Feature suites execute the original modules directly, including event handlers; no source extraction or syntax rewriting is used. `tests/code_search.lua` and `tests/common_text.lua` are invoked by their parent suites, while `tests/support/` holds the code and review host mocks. Tests cover navigation, comments, setup idempotency, Git errors and unusual paths, queued window closure, draft preservation, bounded retries, and session/version guards. Hotspot regressions assert tree, file-read, rendering, and text-measurement call counts, not fixed timing thresholds.
 
-The Rust harness follows the Maki repository’s default branch without a fixed `rev` in `Cargo.toml`; `Cargo.lock` records the resolved commit for reproducible runs. It tests package loading, registered commands, shared APIs, permissions, and Git fixtures:
+The Rust harness pins Maki's `v0.6.4` release tag in `Cargo.toml`; `Cargo.lock` records the resolved commit for reproducible runs. It requires Rust **1.99 or newer**; the devenv shell selects Rust 1.99.0. It tests package loading, registered commands, shared APIs, permissions, and Git fixtures:
 
 ```sh
 just test
