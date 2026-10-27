@@ -229,8 +229,11 @@ fn review_git_handles_special_paths_and_history_from_subdirectory() {
         .unwrap()
         .canonicalize()
         .unwrap();
-    let (_registry, host) =
-        plugin_host_with_permissions(PluginPermissions::from_approved(["run", "fs_read"]));
+    let (_registry, host) = plugin_host_with_permissions(PluginPermissions::from_approved([
+        "run",
+        "fs_read",
+        "session_read",
+    ]));
     run_lua(
         &host,
         &format!(
@@ -389,11 +392,14 @@ fn commands_and_turn_end_work_with_declared_permissions() {
 
     assert_eq!(
         include_str!("../plugin.toml").trim(),
-        "min_maki_version = \"0.6.4\"\n\n[permissions]\nrun = true\nfs_read = true",
+        "min_maki_version = \"0.6.4\"\n\n[permissions]\nrun = true\nfs_read = true\nsession_read = true",
         "update the test grants when the package permission request changes"
     );
-    let (_registry, host) =
-        plugin_host_with_permissions(PluginPermissions::from_approved(["run", "fs_read"]));
+    let (_registry, host) = plugin_host_with_permissions(PluginPermissions::from_approved([
+        "run",
+        "fs_read",
+        "session_read",
+    ]));
     let rx = host.ui_action_rx();
     let event = host.event_handle();
     event.fire_autocmd("TurnEnd", json!({}));
