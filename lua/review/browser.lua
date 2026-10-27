@@ -24,8 +24,13 @@ local function submit(state, restore)
   return true
 end
 local function edit_selected_file(state)
-  local selected = state.frow_map[state.fcursor]
-  local change = type(selected) == "number" and state.working_changes[selected]
+  local change
+  if state.pane == "diff" then
+    change = state.change
+  else
+    local selected = state.frow_map[state.fcursor]
+    change = type(selected) == "number" and state.working_changes[selected]
+  end
   local selected_path = change and not change.commit and change.path
   if not selected_path then
     maki.ui.flash("Select a working-tree file to edit, not a directory")
@@ -588,7 +593,7 @@ local function handle_event(state, ev)
     jump(state, true)
   elseif PANE_KEYS[key] then
     set_pane(state, PANE_KEYS[key])
-  elseif key == "e" and state.pane == "files" then
+  elseif key == "e" and (state.pane == "files" or state.pane == "diff") then
     edit_selected_file(state)
   elseif key == "s" then
     if submit(state, function()

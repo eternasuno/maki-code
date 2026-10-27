@@ -785,6 +785,38 @@ test("untracked external edit and diff use repository-root absolute path", funct
   assert(found)
 end)
 
+test("diff pane external edit opens displayed working-tree file", function(h)
+  local s = h:open()
+  h:key("4")
+  eq(s.pane, "diff")
+  h:key("e")
+  eq(s.pane, "diff")
+  eq(h.editor_path, "/project root/src/deep/b.lua")
+  local found = false
+  for _, w in ipairs(h.windows) do
+    if h:text(w.buf):find("e edit", 1, true) then
+      found = true
+    end
+  end
+  assert(found)
+  eq(s.pane, "diff")
+  eq(s.change.path, "src/deep/b.lua")
+end)
+
+test("diff pane external edit blocks historical commit versions", function(h)
+  local s = h:open()
+  h:key("2")
+  h:key("j")
+  h:key("l")
+  h:key("<CR>")
+  eq(s.pane, "diff")
+  assert(s.change.commit)
+  h:key("e")
+  eq(h.counts.editor, nil)
+  contains(last_flash(h), "Select a working-tree file")
+  eq(s.pane, "diff")
+end)
+
 test("comment store survives close reopen and is independent of code", function(h)
   h:open()
   save(h, "persist")

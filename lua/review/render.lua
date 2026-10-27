@@ -220,6 +220,7 @@ function M.redraw(state)
         or (
           diff_active
             and {
+              { "e", "edit" },
               { "c", "comment" },
               { "v", state.vstart and "cancel select" or "select" },
               { "d", "delete" },
