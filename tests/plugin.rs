@@ -392,13 +392,16 @@ fn commands_and_turn_end_work_with_declared_permissions() {
 
     assert_eq!(
         include_str!("../plugin.toml").trim(),
-        "min_maki_version = \"0.6.4\"\n\n[permissions]\nrun = true\nfs_read = true\nsession_read = true",
+        "min_maki_version = \"0.6.4\"\n\n[permissions]\nrun = true\nfs_read = true\nsession_read = true\ninput = true\nagent = true\nsession_write = true",
         "update the test grants when the package permission request changes"
     );
     let (_registry, host) = plugin_host_with_permissions(PluginPermissions::from_approved([
         "run",
         "fs_read",
         "session_read",
+        "input",
+        "agent",
+        "session_write",
     ]));
     let rx = host.ui_action_rx();
     let event = host.event_handle();

@@ -4,3 +4,6 @@ min_maki_version = "0.6.4"
 run = true
 fs_read = true
 session_read = true
+input = true
+agent = true
+session_write = true

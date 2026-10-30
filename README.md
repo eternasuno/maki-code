@@ -97,7 +97,7 @@ Requiring either module alone registers nothing. Both `setup()` functions are id
 
 ## Installation and permissions
 
-Requires Maki **0.6.4 or newer**, Git on `PATH`, and a POSIX shell environment. The plugin targets the 0.6.4 Lua UI, TextInput, filesystem, and chat input APIs (`input` / `input_edit`); older Maki versions are not supported. Maki 0.6.5 gates `maki.ui.input` and `maki.ui.input_edit` behind `session_read`, which the package requests; without that grant, submitting comments fails with a `permission denied` message. Start Maki in the project directory you want to browse.
+Requires Maki **0.6.4 or newer**, Git on `PATH`, and a POSIX shell environment. The plugin targets the 0.6.4 Lua UI, TextInput, filesystem, and chat input APIs (`input` / `input_edit`); older Maki versions are not supported. Current Maki versions require `session_read` to read the chat input, and `session_read`, `input`, `agent`, and `session_write` to change its text. The package requests all four; missing a required grant can cause comment submission to fail with a `permission denied` message. Start Maki in the project directory you want to browse.
 
 ### Managed package
 
@@ -128,6 +128,9 @@ min_maki_version = "0.6.4"
 run = true
 fs_read = true
 session_read = true
+input = true
+agent = true
+session_write = true
 ```
 
 Then load both in your user `init.lua`:
@@ -137,7 +140,7 @@ require("review").setup()
 require("code").setup()
 ```
 
-Choose one installation method to avoid loading separate copies. The package requests `run` for Git subprocesses, `fs_read` for source metadata/content, and `session_read` for reading and filling the chat input on submit. `session_read` is what Maki 0.6.5 requires for `maki.ui.input` and `maki.ui.input_edit`; 0.6.4 ignores the key because those calls are ungated there. It does not request filesystem write, network, or `agent` access; approve the requested permissions in Maki. Agent modification from comments begins only after you manually send the filled prompt, under the current session’s permissions. The `e` shortcut independently allows editing through your external editor.
+Choose one installation method to avoid loading separate copies. The package requests `run` for Git subprocesses, `fs_read` for source metadata/content, `session_read` for reading the chat input, and `input`, `agent`, and `session_write` for filling its text on submit. Maki requires `agent` and `session_write` even when the plugin only fills a draft for manual sending. After updating an existing installation, approve the added permissions in Maki and run `/reload`. The package does not request filesystem write or network access. Agent modification from comments begins only after you manually send the filled prompt, under the current session’s permissions. The `e` shortcut independently allows editing through your external editor.
 
 ## Verification
 
